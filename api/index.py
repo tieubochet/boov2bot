@@ -59,7 +59,6 @@ def get_token_price(network: str, token_address: str) -> tuple[float, str] | Non
         print(f"Error calling or parsing GeckoTerminal API: {e}")
         return None
 
-# --- LOGIC TÍNH TOÁN PORTFOLIO (Không thay đổi) ---
 def process_portfolio_text(message_text: str) -> str:
     lines = message_text.strip().split('\n')
     total_value = 0.0
