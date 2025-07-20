@@ -1,27 +1,26 @@
+# -*- coding: utf-8 -*-
+
 import os
 import json
 import requests
+import re
+from datetime import datetime
+import pytz
+from apscheduler.schedulers.background import BackgroundScheduler
+import uuid
+import atexit
 from flask import Flask, request, jsonify
-from datetime import datetime, timedelta
-import pytz # Cần cài đặt: pip install pytz
 
 # --- CẤU HÌNH ---
-# Danh sách mạng quét tự động
+# Danh sách các mạng để bot tự động quét khi nhận được địa chỉ contract
+# Sắp xếp theo thứ tự ưu tiên (bot sẽ dừng lại ở mạng đầu tiên tìm thấy)
 AUTO_SEARCH_NETWORKS = ['bsc', 'eth', 'polygon', 'arbitrum', 'base']
-# Đường dẫn file lưu trạng thái người dùng (bật/tắt bot)
+
+# --- QUẢN LÝ TRẠNG THÁI & LỊCH HẸN ---
 STATE_FILE_PATH = '/tmp/bot_user_states.json'
-# Đường dẫn file lưu trữ các công việc
-TASKS_FILE_PATH = '/tmp/bot_tasks.json'
-# Múi giờ UTC+7 cho tính năng nhắc nhở
-TIMEZONE = pytz.timezone('Asia/Ho_Chi_Minh')
-# Khoảng thời gian nhắc nhở trước (tính bằng phút)
-REMINDER_THRESHOLD_MINUTES = 20
-# Secret key để bảo vệ endpoint của cron job. NÊN đặt làm biến môi trường.
-CRON_SECRET = os.getenv("CRON_SECRET", "default-secret-please-change-me")
+REMINDER_FILE_PATH = '/tmp/bot_reminders.json'
 
-
-# --- LOGIC QUẢN LÝ TRẠNG THÁI NGƯỜI DÙNG (BẬT/TẮT BOT) ---
-
+# --- LOGIC QUẢN LÝ TRẠNG THÁI NGƯỜI DÙNG ---
 def load_user_states():
     if not os.path.exists(STATE_FILE_PATH): return {}
     try:
@@ -38,257 +37,230 @@ def set_user_state(chat_id, is_active: bool):
     save_user_states(states)
 
 def is_user_active(chat_id):
-    # Mặc định là TẮT nếu chưa từng có cài đặt
-    return load_user_states().get(str(chat_id), False)
+    # Mặc định là True, người dùng không cần /start ở lần đầu tiên.
+    return load_user_states().get(str(chat_id), True)
 
-
-# --- LOGIC QUẢN LÝ CÔNG VIỆC (TASK MANAGEMENT) ---
-
-def load_tasks():
-    """Tải danh sách công việc từ file JSON."""
-    if not os.path.exists(TASKS_FILE_PATH): return {}
+# --- LOGIC QUẢN LÝ LỊCH HẸN ---
+def load_reminders():
+    if not os.path.exists(REMINDER_FILE_PATH): return []
     try:
-        with open(TASKS_FILE_PATH, 'r') as f: return json.load(f)
-    except (json.JSONDecodeError, FileNotFoundError): return {}
+        with open(REMINDER_FILE_PATH, 'r') as f: return json.load(f)
+    except (json.JSONDecodeError, FileNotFoundError): return []
 
-def save_tasks(tasks):
-    """Lưu danh sách công việc vào file JSON."""
-    os.makedirs(os.path.dirname(TASKS_FILE_PATH), exist_ok=True)
-    with open(TASKS_FILE_PATH, 'w') as f: json.dump(tasks, f, indent=2)
+def save_reminders(reminders):
+    os.makedirs(os.path.dirname(REMINDER_FILE_PATH), exist_ok=True)
+    with open(REMINDER_FILE_PATH, 'w') as f: json.dump(reminders, f, indent=2)
 
-def parse_user_time(time_str: str) -> datetime | None:
+def parse_reminder_text(text: str) -> dict | None:
     """
-    Phân tích cú pháp thời gian người dùng nhập (HH:mm hoặc DD/MM HH:mm)
-    và chuyển thành đối tượng datetime có múi giờ UTC+7.
+    Phân tích cú pháp tin nhắn lịch hẹn.
+    Định dạng: <HH:MM UTC+7 DD/MM/YYYY>:<Nội dung công việc>
+    Trả về một dict chứa thời gian UTC và nội dung, hoặc None nếu sai cú pháp.
     """
-    now = datetime.now(TIMEZONE)
-    formats_to_try = ['%d/%m %H:%M', '%H:%M']
+    pattern = r"^\s*<(\d{2}:\d{2})\s*(UTC[+-]\d{1,2})\s*(\d{2}/\d{2}/\d{4})>\s*:(.*)$"
+    match = re.match(pattern, text, re.IGNORECASE | re.DOTALL)
     
-    for fmt in formats_to_try:
-        try:
-            dt_naive = datetime.strptime(time_str, fmt)
-            if fmt == '%H:%M': # Chỉ có giờ:phút, giả định là hôm nay
-                dt_aware = now.replace(hour=dt_naive.hour, minute=dt_naive.minute, second=0, microsecond=0)
-            else: # Có ngày/tháng, giả định là năm nay
-                dt_aware = now.replace(month=dt_naive.month, day=dt_naive.day, hour=dt_naive.hour, minute=dt_naive.minute, second=0, microsecond=0)
-            return dt_aware
-        except ValueError:
-            continue
-    return None
+    if not match:
+        return None
 
-def add_task(chat_id, task_string: str) -> str:
-    """Thêm một công việc mới cho người dùng."""
+    time_str, tz_str, date_str, task_description = match.groups()
+    
     try:
-        time_str, task_name = task_string.split(':', 1)
-        time_str, task_name = time_str.strip(), task_name.strip()
-    except ValueError:
-        return "❌ Cú pháp sai. Dùng: `<thời gian>:<tên công việc>`."
+        tz_offset = int(tz_str.replace("UTC", ""))
+        tz = pytz.FixedOffset(tz_offset * 60)
 
-    task_dt = parse_user_time(time_str)
-    if not task_dt:
-        return "❌ Định dạng thời gian sai. Dùng `HH:mm` hoặc `DD/MM HH:mm`."
+        local_dt_str = f"{date_str} {time_str}"
+        naive_dt = datetime.strptime(local_dt_str, "%d/%m/%Y %H:%M")
+        local_dt = tz.localize(naive_dt)
 
-    if task_dt < datetime.now(TIMEZONE):
-        return "❌ Không thể đặt lịch cho quá khứ."
+        utc_dt = local_dt.astimezone(pytz.utc)
 
-    tasks = load_tasks()
-    chat_id_str = str(chat_id)
-    if chat_id_str not in tasks: tasks[chat_id_str] = []
+        if utc_dt <= datetime.now(pytz.utc): # Không cho đặt lịch trong quá khứ
+            return "past_date"
 
-    new_task = {"time_iso": task_dt.isoformat(), "name": task_name, "reminded": False}
-    tasks[chat_id_str].append(new_task)
-    tasks[chat_id_str].sort(key=lambda x: x['time_iso'])
-    save_tasks(tasks)
+        return {
+            "trigger_time_utc": utc_dt.isoformat(),
+            "task_description": task_description.strip(),
+            "user_timezone_str": tz_str.upper()
+        }
+    except Exception as e:
+        print(f"Error parsing date/time: {e}")
+        return None
+
+def format_reminders_list(chat_id: int) -> str:
+    """Tạo danh sách các lịch hẹn đang chờ cho một người dùng."""
+    all_reminders = load_reminders()
+    user_reminders = [r for r in all_reminders if r.get('chat_id') == chat_id]
+
+    if not user_reminders:
+        return "Bạn không có lịch hẹn nào đang chờ."
+
+    user_reminders.sort(key=lambda r: r['trigger_time_utc'])
+    hcm_tz = pytz.timezone('Asia/Ho_Chi_Minh')
     
-    return f"✅ Đã thêm lịch: *{task_name}* lúc *{task_dt.strftime('%H:%M %d/%m/%Y')}*."
-
-def list_tasks(chat_id) -> str:
-    """Liệt kê các công việc chưa hoàn thành của người dùng."""
-    tasks = load_tasks()
-    chat_id_str = str(chat_id)
-    user_tasks = tasks.get(chat_id_str, [])
-    
-    now = datetime.now(TIMEZONE)
-    active_tasks = [t for t in user_tasks if datetime.fromisoformat(t['time_iso']) > now]
-    if len(active_tasks) < len(user_tasks): # Nếu có task đã hết hạn
-        tasks[chat_id_str] = active_tasks
-        save_tasks(tasks)
-
-    if not active_tasks:
-        return "Bạn không có lịch hẹn nào sắp tới."
-
     result_lines = ["*🗓️ Danh sách lịch hẹn của bạn:*"]
-    for i, task in enumerate(active_tasks):
-        task_dt = datetime.fromisoformat(task['time_iso'])
-        result_lines.append(f"*{i+1}.* `{task_dt.strftime('%H:%M %d/%m')}` - {task['name']}")
+    for r in user_reminders:
+        utc_dt = datetime.fromisoformat(r['trigger_time_utc'].replace('Z', '+00:00'))
+        local_dt = utc_dt.astimezone(hcm_tz)
+        time_display = local_dt.strftime('%H:%M ngày %d/%m/%Y')
+        result_lines.append(f"- `{time_display}`: {r['task_description']}")
+    
     return "\n".join(result_lines)
 
-def delete_task(chat_id, task_index_str: str) -> str:
-    """Xóa một công việc theo số thứ tự."""
+# --- LOGIC LẤY DỮ LIỆU TỪ API ---
+def get_token_price(network: str, token_address: str) -> tuple[float, str] | None:
+    url = f"https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{token_address}"
     try:
-        task_index = int(task_index_str) - 1
-        if task_index < 0: raise ValueError
-    except (ValueError, IndexError):
-        return "❌ Số thứ tự không hợp lệ."
-
-    tasks = load_tasks()
-    chat_id_str = str(chat_id)
-    now = datetime.now(TIMEZONE)
-    active_tasks = [t for t in tasks.get(chat_id_str, []) if datetime.fromisoformat(t['time_iso']) > now]
-
-    if task_index >= len(active_tasks):
-        return "❌ Số thứ tự không hợp lệ."
-
-    task_to_delete = active_tasks.pop(task_index)
-    tasks[chat_id_str] = [t for t in tasks.get(chat_id_str, []) if t['time_iso'] != task_to_delete['time_iso']]
-    save_tasks(tasks)
-    return f"✅ Đã xóa lịch hẹn: *{task_to_delete['name']}*"
-
-
-# --- LOGIC LẤY DỮ LIỆU CRYPTO ---
+        response = requests.get(url, headers={"accept": "application/json"})
+        if response.status_code != 200: return None
+        data = response.json()
+        attributes = data.get('data', {}).get('attributes', {})
+        price_usd_str = attributes.get('price_usd')
+        symbol = attributes.get('symbol', 'N/A')
+        if price_usd_str: return (float(price_usd_str), symbol)
+        return None
+    except Exception: return None
 
 def get_full_token_info(network: str, token_address: str) -> dict | None:
     url = f"https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{token_address}?include=top_pools"
     try:
-        response = requests.get(url, headers={"accept": "application/json"}, timeout=10)
+        response = requests.get(url, headers={"accept": "application/json"})
         if response.status_code != 200: return None
-        data = response.json()
-        token_data = data.get('data', {}).get('attributes', {})
+        response_data = response.json()
+        token_data = response_data.get('data', {}).get('attributes', {})
         if not token_data: return None
-        
         top_dex_name = "N/A"
-        if data.get('included'):
-            included_map = {item['id']: item for item in data['included']}
-            top_pools_data = data.get('data', {}).get('relationships', {}).get('top_pools', {}).get('data', [])
-            if top_pools_data:
-                pool_info = included_map.get(top_pools_data[0]['id'])
-                if pool_info:
-                    dex_id = pool_info.get('relationships', {}).get('dex', {}).get('data', {}).get('id')
-                    dex_info = included_map.get(dex_id)
-                    if dex_info: top_dex_name = dex_info.get('attributes', {}).get('name')
-
+        included_data = response_data.get('included', [])
+        included_map = {item['id']: item for item in included_data}
+        top_pools = response_data.get('data', {}).get('relationships', {}).get('top_pools', {}).get('data', [])
+        if top_pools:
+            pool_info = included_map.get(top_pools[0]['id'])
+            if pool_info:
+                dex_id = pool_info.get('relationships', {}).get('dex', {}).get('data', {}).get('id')
+                dex_info = included_map.get(dex_id)
+                if dex_info: top_dex_name = dex_info.get('attributes', {}).get('name')
         return {
-            "network": network, "name": token_data.get('name'), "symbol": token_data.get('symbol'),
+            "network": network,
+            "name": token_data.get('name'), "symbol": token_data.get('symbol'),
             "price_usd": token_data.get('price_usd'),
             "price_change_24h": token_data.get('price_change_percentage', {}).get('h24'),
             "address": token_data.get('address'),
             "gecko_terminal_link": f"https://www.geckoterminal.com/{network}/tokens/{token_address}",
             "top_dex_name": top_dex_name
         }
-    except requests.RequestException: return None
+    except Exception: return None
+
+# --- LOGIC XỬ LÝ TIN NHẮN ---
+def format_token_info_message(info: dict) -> str:
+    network = info.get('network', 'N/A')
+    price_str = f"${float(info['price_usd']):,.8f}" if info.get('price_usd') else "N/A"
+    price_change_str = "N/A"
+    if info.get('price_change_24h'):
+        change = float(info['price_change_24h'])
+        emoji = "📈" if change >= 0 else "📉"
+        price_change_str = f"{emoji} {change:+.2f}%"
+    return (
+        f"✅ *Tìm thấy trên mạng {network.upper()}*\n"
+        f"*{info.get('name', 'N/A')} ({info.get('symbol', 'N/A')})*\n\n"
+        f"Giá: *{price_str}*\n"
+        f"24h: *{price_change_str}*\n"
+        f"Sàn DEX chính: `{info.get('top_dex_name', 'N/A')}`\n\n"
+        f"🔗 [Xem trên GeckoTerminal]({info.get('gecko_terminal_link')})\n\n"
+        f"`{info.get('address')}`"
+    )
 
 def find_token_across_networks(address: str) -> str:
-    """Quét địa chỉ contract qua nhiều mạng và trả về kết quả đầu tiên."""
     for network in AUTO_SEARCH_NETWORKS:
+        print(f"Searching for {address} on {network}...")
         info = get_full_token_info(network, address.lower())
         if info:
-            price = float(info['price_usd']) if info.get('price_usd') else 0
-            price_change = float(info['price_change_24h']) if info.get('price_change_24h') else 0
-            emoji = "📈" if price_change >= 0 else "📉"
-            return (
-                f"✅ *Tìm thấy trên mạng {info['network'].upper()}*\n"
-                f"*{info.get('name', 'N/A')} ({info.get('symbol', 'N/A')})*\n\n"
-                f"Giá: *${price:,.8f}*\n"
-                f"24h: *{emoji} {price_change:+.2f}%*\n"
-                f"Sàn DEX chính: `{info.get('top_dex_name', 'N/A')}`\n\n"
-                f"🔗 [Xem trên GeckoTerminal]({info.get('gecko_terminal_link')})\n\n"
-                f"`{info.get('address')}`"
-            )
-    return f"❌ Không tìm thấy token với địa chỉ `{address[:10]}...` trên các mạng đã quét."
+            return format_token_info_message(info)
+    return f"❌ Không tìm thấy token với địa chỉ `{address[:10]}...` trên các mạng được quét: `{'`, `'.join(AUTO_SEARCH_NETWORKS)}`."
 
 def process_portfolio_text(message_text: str) -> str | None:
-    """Xử lý tin nhắn tính toán portfolio."""
     lines = message_text.strip().split('\n')
-    total_value, result_lines, valid_lines_count = 0.0, [], 0
-
-    for line in lines:
+    total_value = 0.0
+    result_lines = []
+    valid_lines_count = 0
+    for i, line in enumerate(lines):
         parts = line.strip().split()
         if len(parts) != 3: continue
-        
         amount_str, address, network = parts
-        try: amount = float(amount_str)
-        except ValueError: continue
-        
-        valid_lines_count += 1
-        url = f"https://api.geckoterminal.com/api/v2/networks/{network.lower()}/tokens/{address.lower()}"
         try:
-            response = requests.get(url, headers={"accept": "application/json"}, timeout=5)
-            if response.status_code == 200:
-                data = response.json().get('data', {}).get('attributes', {})
-                price = float(data.get('price_usd', 0))
-                symbol = data.get('symbol', 'N/A')
-                value = amount * price
-                total_value += value
-                result_lines.append(f"*{symbol}*: ${price:,.4f} x {amount_str} = *${value:,.2f}*")
-            else:
-                result_lines.append(f"❌ Không tìm thấy giá cho `{address[:10]}...` trên `{network}`.")
-        except requests.RequestException:
-            result_lines.append(f"🔌 Lỗi mạng khi lấy giá cho `{address[:10]}...`.")
-
+            amount = float(amount_str)
+            if not is_evm_address(address):
+                 result_lines.append(f"Dòng {i+1}: ❌ Địa chỉ không hợp lệ.")
+                 continue
+        except ValueError: continue
+        valid_lines_count += 1
+        price_data = get_token_price(network.lower(), address.lower())
+        if price_data:
+            price, symbol = price_data
+            value = amount * price
+            total_value += value
+            result_lines.append(f"*{symbol}*: ${price:,.4f} x {amount_str} = *${value:,.2f}*")
+        else:
+            result_lines.append(f"❌ Không tìm thấy giá cho `{address[:10]}...` trên `{network}`.")
     if valid_lines_count == 0: return None
-    return "\n".join(result_lines) + f"\n--------------------\n*Tổng cộng: *${total_value:,.2f}**"
+    final_result_text = "\n".join(result_lines)
+    summary = f"\n--------------------\n*Tổng cộng: *${total_value:,.2f}**"
+    return final_result_text + summary
 
+# --- CÁC HÀM TIỆN ÍCH ---
+def is_evm_address(address_str: str) -> bool:
+    return isinstance(address_str, str) and address_str.startswith('0x') and len(address_str) == 42
 
-# --- CÁC HÀM TIỆN ÍCH BOT ---
-def is_evm_address(s: str) -> bool:
-    return isinstance(s, str) and s.startswith('0x') and len(s) == 42
+# --- HÀM GỬI/CHỈNH SỬA TIN NHẮN TELEGRAM ---
+def create_refresh_button():
+    return json.dumps({'inline_keyboard': [[{'text': '🔄 Refresh', 'callback_data': 'refresh_portfolio'}]]})
 
-def send_telegram_message(chat_id, text, token, **kwargs):
+def send_telegram_message(chat_id, text, token, reply_to_message_id=None, reply_markup=None, disable_web_page_preview=False):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {'chat_id': chat_id, 'text': text, 'parse_mode': 'Markdown', **kwargs}
-    try:
-        requests.post(url, json=payload, timeout=10)
-    except requests.RequestException as e:
-        print(f"Error sending message to {chat_id}: {e}")
+    payload = {'chat_id': chat_id, 'text': text, 'parse_mode': 'Markdown', 'disable_web_page_preview': disable_web_page_preview}
+    if reply_to_message_id: payload['reply_to_message_id'] = reply_to_message_id
+    if reply_markup: payload['reply_markup'] = reply_markup
+    requests.post(url, json=payload)
 
-def edit_telegram_message(chat_id, message_id, text, token, **kwargs):
+def edit_telegram_message(chat_id, message_id, text, token, reply_markup=None, disable_web_page_preview=False):
     url = f"https://api.telegram.org/bot{token}/editMessageText"
-    payload = {'chat_id': chat_id, 'message_id': message_id, 'text': text, 'parse_mode': 'Markdown', **kwargs}
-    try:
-        requests.post(url, json=payload, timeout=10)
-    except requests.RequestException as e:
-        print(f"Error editing message {message_id} in {chat_id}: {e}")
+    payload = {'chat_id': chat_id, 'message_id': message_id, 'text': text, 'parse_mode': 'Markdown', 'disable_web_page_preview': disable_web_page_preview}
+    if reply_markup: payload['reply_markup'] = reply_markup
+    requests.post(url, json=payload)
 
 def answer_callback_query(callback_query_id, token):
     url = f"https://api.telegram.org/bot{token}/answerCallbackQuery"
-    try:
-        requests.post(url, json={'callback_query_id': callback_query_id}, timeout=5)
-    except requests.RequestException as e:
-        print(f"Error answering callback query {callback_query_id}: {e}")
+    payload = {'callback_query_id': callback_query_id}
+    requests.post(url, json=payload)
 
+# --- HÀM KIỂM TRA LỊCH HẸN CỦA SCHEDULER ---
+def check_and_send_reminders():
+    BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
+    if not BOT_TOKEN:
+        print("Cannot run reminder job: TELEGRAM_TOKEN not set.")
+        return
+        
+    print(f"[{datetime.now()}] Running scheduled job: Checking reminders...")
+    all_reminders = load_reminders()
+    due_reminders_indices = []
+    now_utc = datetime.now(pytz.utc)
 
-# --- LOGIC QUÉT VÀ GỬI NHẮC NHỞ (CHO CRON JOB) ---
-def check_and_send_reminders(bot_token: str):
-    print(f"[{datetime.now()}] Running reminder check...")
-    all_tasks = load_tasks()
-    now = datetime.now(TIMEZONE)
-    reminders_sent_count = 0
-    tasks_changed = False
+    for i, reminder in enumerate(all_reminders):
+        trigger_time = datetime.fromisoformat(reminder['trigger_time_utc'].replace('Z', '+00:00'))
+        if trigger_time <= now_utc:
+            try:
+                reminder_message = f"⏰ *LỊCH HẸN ĐẾN HẠN!*\n\nNội dung: *{reminder['task_description']}*"
+                send_telegram_message(reminder['chat_id'], reminder_message, BOT_TOKEN, reply_to_message_id=reminder['message_id'])
+                print(f"Sent reminder for task '{reminder['task_description']}' to chat {reminder['chat_id']}")
+            except Exception as e:
+                print(f"Failed to send reminder for task '{reminder['task_description']}': {e}")
+            finally:
+                due_reminders_indices.append(i)
 
-    for chat_id, user_tasks in all_tasks.items():
-        for task in user_tasks:
-            if task.get("reminded", False): continue
-            
-            task_time = datetime.fromisoformat(task['time_iso'])
-            if task_time < now: continue
-
-            time_until_due = task_time - now
-            if timedelta(0) < time_until_due <= timedelta(minutes=REMINDER_THRESHOLD_MINUTES):
-                minutes_left = int(time_until_due.total_seconds() / 60)
-                reminder_text = (
-                    f"‼️ *NHẮC NHỞ LỊCH HẸN* ‼️\n\n"
-                    f"Sự kiện: *{task['name']}*\n"
-                    f"Sẽ diễn ra trong khoảng *{minutes_left} phút* nữa (lúc {task_time.strftime('%H:%M')})."
-                )
-                send_telegram_message(chat_id, reminder_text, bot_token)
-                task['reminded'] = True
-                tasks_changed = True
-                reminders_sent_count += 1
-
-    if tasks_changed: save_tasks(all_tasks)
-    print(f"Reminder check finished. Sent {reminders_sent_count} reminders.")
-    return {"status": "success", "reminders_sent": reminders_sent_count}
-
+    if due_reminders_indices:
+        for i in sorted(due_reminders_indices, reverse=True):
+            del all_reminders[i]
+        save_reminders(all_reminders)
+        print(f"Removed {len(due_reminders_indices)} due reminders.")
 
 # --- WEB SERVER VỚI FLASK ---
 app = Flask(__name__)
@@ -299,20 +271,22 @@ def webhook():
     if not BOT_TOKEN: return "Bot token not configured", 500
 
     data = request.get_json()
-
+    
     # Xử lý callback query (Nút Refresh)
     if "callback_query" in data:
         callback_query = data["callback_query"]
-        answer_callback_query(callback_query["id"], BOT_TOKEN)
         if callback_query.get("data") == "refresh_portfolio":
+            answer_callback_query(callback_query["id"], BOT_TOKEN)
             chat_id = callback_query["message"]["chat"]["id"]
             message_id_to_edit = callback_query["message"]["message_id"]
             if "reply_to_message" in callback_query["message"]:
-                portfolio_result = process_portfolio_text(callback_query["message"]["reply_to_message"]["text"])
+                original_message_text = callback_query["message"]["reply_to_message"]["text"]
+                portfolio_result = process_portfolio_text(original_message_text)
                 if portfolio_result:
-                    edit_telegram_message(chat_id, message_id_to_edit, portfolio_result, BOT_TOKEN, reply_markup=json.dumps({'inline_keyboard': [[{'text': '🔄 Refresh', 'callback_data': 'refresh_portfolio'}]]}))
+                    refresh_button_markup = create_refresh_button()
+                    edit_telegram_message(chat_id, message_id_to_edit, portfolio_result, BOT_TOKEN, reply_markup=refresh_button_markup)
             else:
-                edit_telegram_message(chat_id, message_id_to_edit, "Lỗi: Không tìm thấy tin nhắn gốc.", BOT_TOKEN)
+                edit_telegram_message(chat_id, message_id_to_edit, "Lỗi: Không tìm thấy tin nhắn gốc để làm mới.", BOT_TOKEN)
         return jsonify(success=True)
 
     # Xử lý tin nhắn văn bản
@@ -320,74 +294,103 @@ def webhook():
         chat_id = data["message"]["chat"]["id"]
         message_id = data["message"]["message_id"]
         message_text = data["message"]["text"].strip()
-        parts = message_text.split()
-        command = parts[0].lower()
         
-        # Lệnh nhắc nhở
-        if command.startswith('/'):
-            if command == '/add':
-                result = add_task(chat_id, " ".join(parts[1:])) if len(parts) > 1 else "Cú pháp: `/add <thời gian>:<tên công việc>`"
-                send_telegram_message(chat_id, result, BOT_TOKEN, reply_to_message_id=message_id)
-            elif command == '/list':
-                send_telegram_message(chat_id, list_tasks(chat_id), BOT_TOKEN, reply_to_message_id=message_id)
-            elif command == '/del':
-                result = delete_task(chat_id, parts[1]) if len(parts) > 1 else "Cú pháp: `/del <số thứ tự>`"
-                send_telegram_message(chat_id, result, BOT_TOKEN, reply_to_message_id=message_id)
-            elif command in ["/start", "/sta"]:
-                set_user_state(chat_id, True)
-                start_message = (
-                    "✅ *Bot đã được bật.*\n\n"
-                    "*Chức năng nhắc nhở:*\n"
-                    "`/add HH:mm: Tên công việc`\n"
-                    "`/list`\n"
-                    "`/del <số>`\n\n"
-                    "*Chức năng Crypto:*\n"
-                    "- Gửi địa chỉ contract để tra cứu.\n"
-                    "- Gửi portfolio để tính toán.\n\n"
-                    "Gõ /sto để tạm dừng bot."
-                )
-                send_telegram_message(chat_id, start_message, BOT_TOKEN)
-            elif command == '/sto':
-                set_user_state(chat_id, False)
-                send_telegram_message(chat_id, "☑️ *Bot đã được tắt.*", BOT_TOKEN)
+        # 1. XỬ LÝ CÁC LỆNH ĐIỀU KHIỂN
+        if message_text.lower() in ["/start", "/sta"]:
+            set_user_state(chat_id, True)
+            start_message = (
+                "✅ *Bot đã được bật.*\n\n"
+                "1️⃣ *Tra cứu Token:*\nGửi một địa chỉ contract duy nhất.\nVí dụ: `0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c`\n\n"
+                "2️⃣ *Tính toán Portfolio:*\nGửi danh sách token theo cú pháp (mỗi token một dòng):\n`[số lượng] [địa chỉ contract] [mạng]`\n\n"
+                "3️⃣ *Thêm Lịch hẹn:*\n`<HH:MM UTC+7 DD/MM/YYYY>:<Công việc>`\nVí dụ: `<09:00 UTC+7 25/12/2024>:Claim token X`\n\n"
+                "4️⃣ *Xem Lịch hẹn:*\nGõ `/lich`\n\n"
+                "Gõ /sto để tạm dừng bot."
+            )
+            send_telegram_message(chat_id, start_message, BOT_TOKEN)
+            return jsonify(success=True)
+            
+        elif message_text.lower() == "/sto":
+            set_user_state(chat_id, False)
+            stop_message = "☑️ *Bot đã được tắt.* Mọi tin nhắn (trừ lệnh) sẽ được bỏ qua.\n\nGõ /sta để bật lại."
+            send_telegram_message(chat_id, stop_message, BOT_TOKEN)
+            return jsonify(success=True)
+            
+        elif message_text.lower() == "/lich":
+            reminders_list_text = format_reminders_list(chat_id)
+            send_telegram_message(chat_id, reminders_list_text, BOT_TOKEN, reply_to_message_id=message_id)
             return jsonify(success=True)
 
-        # Xử lý tin nhắn khác (khi bot đang bật)
+        # 2. XỬ LÝ CÁC TIN NHẮN KHÁC (CHỈ KHI BOT ĐANG BẬT)
         if is_user_active(chat_id):
-            if len(parts) == 1 and is_evm_address(parts[0]):
-                temp_msg = send_telegram_message(chat_id, f"🔍 Đang tìm kiếm `{parts[0][:10]}...`", BOT_TOKEN, reply_to_message_id=message_id)
-                result_text = find_token_across_networks(parts[0])
-                edit_telegram_message(chat_id, message_id + 1, result_text, BOT_TOKEN, disable_web_page_preview=True)
+            # Ưu tiên 1: Kiểm tra có phải là lịch hẹn không
+            parsed_reminder = parse_reminder_text(message_text)
+            if parsed_reminder:
+                if parsed_reminder == "past_date":
+                    send_telegram_message(chat_id, "❌ Không thể đặt lịch cho một thời điểm trong quá khứ.", BOT_TOKEN, reply_to_message_id=message_id)
+                    return jsonify(success=True)
+
+                all_reminders = load_reminders()
+                new_reminder = { "id": str(uuid.uuid4()), "chat_id": chat_id, "message_id": message_id, **parsed_reminder }
+                all_reminders.append(new_reminder)
+                save_reminders(all_reminders)
+                
+                hcm_tz = pytz.timezone('Asia/Ho_Chi_Minh')
+                utc_dt = datetime.fromisoformat(new_reminder['trigger_time_utc'].replace('Z', '+00:00'))
+                local_dt = utc_dt.astimezone(hcm_tz)
+                time_display = local_dt.strftime('%H:%M ngày %d/%m/%Y')
+                confirmation_message = (
+                    f"✅ *Đã lên lịch thành công!*\n\n"
+                    f"Nội dung: *{new_reminder['task_description']}*\n"
+                    f"Thời gian: `{time_display} (UTC+7)`\n\n"
+                    f"Gõ /lich để xem tất cả."
+                )
+                send_telegram_message(chat_id, confirmation_message, BOT_TOKEN, reply_to_message_id=message_id)
+            
+            # Ưu tiên 2: Kiểm tra xem có phải là một địa chỉ contract duy nhất không
+            elif len(message_text.split()) == 1 and is_evm_address(message_text):
+                address = message_text
+                # Gửi tin nhắn tạm thời và edit sau để người dùng biết bot đang xử lý
+                response = requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                    json={'chat_id': chat_id, 'text': f"🔍 Đang tìm kiếm địa chỉ `{address[:10]}...`", 'parse_mode': 'Markdown', 'reply_to_message_id': message_id}
+                ).json()
+                if response.get('ok'):
+                    message_id_to_edit = response['result']['message_id']
+                    result_text = find_token_across_networks(address)
+                    edit_telegram_message(chat_id, message_id_to_edit, result_text, BOT_TOKEN, disable_web_page_preview=True)
+
+            # Ưu tiên 3: Thử xử lý như một portfolio
             else:
                 portfolio_result = process_portfolio_text(message_text)
                 if portfolio_result:
-                    refresh_button = {'inline_keyboard': [[{'text': '🔄 Refresh', 'callback_data': 'refresh_portfolio'}]]}
-                    send_telegram_message(chat_id, portfolio_result, BOT_TOKEN, reply_to_message_id=message_id, reply_markup=json.dumps(refresh_button))
-                else:
-                    error_message = "🤔 Cú pháp không hợp lệ. Gửi `/start` để xem hướng dẫn."
-                    send_telegram_message(chat_id, error_message, BOT_TOKEN, reply_to_message_id=message_id)
+                    # Gửi tin nhắn tạm thời và edit sau
+                    response = requests.post(
+                        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                        json={'chat_id': chat_id, 'text': "Đang tính toán portfolio...", 'parse_mode': 'Markdown', 'reply_to_message_id': message_id}
+                    ).json()
+                    if response.get('ok'):
+                        message_id_to_edit = response['result']['message_id']
+                        refresh_button_markup = create_refresh_button()
+                        edit_telegram_message(chat_id, message_id_to_edit, portfolio_result, BOT_TOKEN, reply_markup=refresh_button_markup)
         
     return jsonify(success=True)
 
+# --- KHỞI TẠO VÀ CHẠY SCHEDULER ---
+# Chỉ khởi tạo một lần duy nhất khi ứng dụng bắt đầu
+scheduler = BackgroundScheduler(timezone=pytz.utc)
+scheduler.add_job(
+    func=check_and_send_reminders,
+    trigger="interval",
+    seconds=30  # Kiểm tra mỗi 30 giây
+)
+scheduler.start()
 
-@app.route('/check_reminders', methods=['POST'])
-def cron_webhook():
-    """Endpoint được gọi bởi dịch vụ Cron Job."""
-    secret_from_header = request.headers.get('X-Cron-Secret')
-    secret_from_body = request.get_json(silent=True).get('secret') if request.is_json else None
-    
-    if secret_from_header != CRON_SECRET and secret_from_body != CRON_SECRET:
-        return jsonify(error="Unauthorized"), 403
+# Đảm bảo scheduler được tắt một cách an toàn khi ứng dụng thoát
+atexit.register(lambda: scheduler.shutdown())
 
-    BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
-    if not BOT_TOKEN: return jsonify(error="Bot token not configured"), 500
-        
-    result = check_and_send_reminders(BOT_TOKEN)
-    return jsonify(result)
-
-# Lệnh để chạy cục bộ (tùy chọn)
-# if __name__ == '__main__':
-#     # Đặt biến môi trường trước khi chạy
-#     # export TELEGRAM_TOKEN="your_bot_token"
-#     # export CRON_SECRET="your_secret"
-#     app.run(debug=True, port=5001)
+# Đoạn này để chạy test local, khi deploy thực tế sẽ dùng Gunicorn/uWSGI
+if __name__ == '__main__':
+    print("Starting Flask app with scheduler...")
+    # Lấy port từ biến môi trường, mặc định là 5000
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
