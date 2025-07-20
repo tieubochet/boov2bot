@@ -204,9 +204,18 @@ def webhook():
                 "`/list` - Xem danh sách công việc\n"
                 "`/del <số>` - Xóa công việc\n"
                 "`/edit <số> DD/MM HH:mm - Tên mới`\n\n"
-                "**Chức năng Crypto:**\n"
-                "- Gửi địa chỉ contract để tra cứu.\n"
-                "- Gửi portfolio để tính toán."
+                "**Chức năng Crypto:**\n\n"
+                "1️⃣ *Tra cứu Token*\n"
+                "Chỉ cần gửi địa chỉ contract của token.\n"
+                "_Ví dụ:_\n`0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c`\n\n"
+                "2️⃣ *Tính Portfolio*\n"
+                "Gửi danh sách theo cú pháp (mỗi token một dòng):\n"
+                "`[số lượng] [địa chỉ] [mạng]`\n"
+                "_Ví dụ:_\n"
+                "```\n"
+                "0.5 0x2260fac5e5542a773aa44fbcfedf7c193bc2c599 eth\n"
+                "1000 0x55d398326f99059ff775485246999027b3197955 bsc\n"
+                "```"
             ))
         elif cmd == '/add':
             send_telegram_message(chat_id, text=add_task(chat_id, " ".join(parts[1:])), reply_to_message_id=msg_id)
