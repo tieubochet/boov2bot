@@ -251,16 +251,16 @@ def webhook():
                     refresh_button_markup = create_refresh_button()
                     # Dùng edit thay vì gửi mới
                     edit_telegram_message(chat_id, message_id + 1, portfolio_result, BOT_TOKEN, reply_markup=refresh_button_markup)
-                else:
+                #else:
                     # Nếu cả hai đều không thành công -> Gửi hướng dẫn
-                    error_message = (
-                        "🤔 *Cú pháp không hợp lệ.*\n\n"
-                        "Vui lòng thử một trong hai cách sau:\n\n"
-                        "1️⃣ *Để tra cứu Token:*\n"
-                        "Gửi một địa chỉ contract duy nhất.\n\n"
-                        "2️⃣ *Để tính Portfolio:*\n"
-                        "Gửi danh sách theo cú pháp:\n`số_lượng địa_chỉ mạng`"
-                    )
-                    send_telegram_message(chat_id, error_message, BOT_TOKEN, reply_to_message_id=message_id)
+                    # error_message = (
+                    #    "🤔 *Cú pháp không hợp lệ.*\n\n"
+                    #    "Vui lòng thử một trong hai cách sau:\n\n"
+                    #    "1️⃣ *Để tra cứu Token:*\n"
+                    #    "Gửi một địa chỉ contract duy nhất.\n\n"
+                    #    "2️⃣ *Để tính Portfolio:*\n"
+                    #    "Gửi danh sách theo cú pháp:\n`số_lượng địa_chỉ mạng`"
+                    # )
+                    #send_telegram_message(chat_id, error_message, BOT_TOKEN, reply_to_message_id=message_id)
         
     return jsonify(success=True)
