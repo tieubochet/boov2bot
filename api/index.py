@@ -13,9 +13,9 @@ BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 # --- KẾT NỐI CƠ SỞ DỮ LIỆU (VERCEL KV - REDIS) ---
 try:
-    kv_url = os.getenv("KV_URL")
+    kv_url = os.getenv("teeboov2_REDIS_URL")
     if not kv_url:
-        raise ValueError("KV_URL is not set. Please connect a Vercel KV store to save tasks.")
+        raise ValueError("teeboov2_REDIS_URL is not set. Please connect a Vercel KV store to save tasks.")
     kv = Redis.from_url(kv_url, decode_responses=True)
 except Exception as e:
     print(f"FATAL: Could not connect to Redis. Task features will be disabled. Error: {e}")
