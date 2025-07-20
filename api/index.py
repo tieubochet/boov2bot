@@ -10,12 +10,6 @@ from redis import Redis
 AUTO_SEARCH_NETWORKS = ['bsc', 'eth', 'polygon', 'arbitrum', 'base']
 TIMEZONE = pytz.timezone('Asia/Ho_Chi_Minh')
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
-SYMBOL_TO_ID_MAP = {
-    'btc': 'bitcoin', 'eth': 'ethereum', 'bnb': 'binancecoin', 'sol': 'solana',
-    'xrp': 'ripple', 'doge': 'dogecoin', 'shib': 'shiba-inu', 'dot': 'polkadot',
-    'ada': 'cardano', 'avax': 'avalanche-2', 'link': 'chainlink', 'matic': 'matic-network',
-    'dom': 'dominium-2'
-}
 
 # --- KẾT NỐI CƠ SỞ DỮ LIỆU (VERCEL KV - REDIS) ---
 try:
@@ -29,19 +23,14 @@ except Exception as e:
 
 # --- LOGIC QUẢN LÝ CÔNG VIỆC ---
 def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | None]:
-    """Phân tích cú pháp chuỗi 'DD/MM HH:mm - Tên' thành (datetime, name)."""
     try:
         time_part, name_part = task_string.split(' - ', 1)
         name_part = name_part.strip()
         if not name_part: return None, None
-        
         now = datetime.now(TIMEZONE)
         dt_naive = datetime.strptime(time_part.strip(), '%d/%m %H:%M')
-        return now.replace(
-            month=dt_naive.month, day=dt_naive.day, hour=dt_naive.hour, minute=dt_naive.minute, second=0, microsecond=0
-        ), name_part
-    except ValueError:
-        return None, None
+        return now.replace(month=dt_naive.month, day=dt_naive.day, hour=dt_naive.hour, minute=dt_naive.minute, second=0, microsecond=0), name_part
+    except ValueError: return None, None
 
 def add_task(chat_id, task_string: str) -> str:
     if not kv: return "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
@@ -99,51 +88,27 @@ def delete_task(chat_id, task_index_str: str) -> str:
     return f"✅ Đã xóa lịch hẹn: *{task_to_delete['name']}*"
 
 # --- LOGIC CRYPTO & TIỆN ÍCH BOT ---
-def get_coingecko_id(symbol: str) -> str:
-    return SYMBOL_TO_ID_MAP.get(symbol.lower(), symbol.lower())
-
+### <<< THÊM MỚI: Chức năng lấy giá bằng ký hiệu từ CoinGecko ###
 def get_price_by_symbol(symbol: str) -> float | None:
-    coin_id = get_coingecko_id(symbol)
+    """Lấy giá của một token bằng ký hiệu (ví dụ: btc, eth) từ CoinGecko."""
+    # Bản đồ chuyển đổi các ký hiệu phổ biến sang ID của CoinGecko
+    symbol_to_id_map = {
+        'btc': 'bitcoin', 'eth': 'ethereum', 'bnb': 'binancecoin',
+        'sol': 'solana', 'xrp': 'ripple', 'doge': 'dogecoin', 'shib': 'shiba-inu'
+    }
+    # Sử dụng ID đã map nếu có, nếu không thì dùng chính ký hiệu người dùng nhập (viết thường)
+    coin_id = symbol_to_id_map.get(symbol.lower(), symbol.lower())
+    
     url = "https://api.coingecko.com/api/v3/simple/price"
     params = {'ids': coin_id, 'vs_currencies': 'usd'}
     try:
-        res = requests.get(url, params=params, timeout=5)
-        return res.json().get(coin_id, {}).get('usd') if res.status_code == 200 else None
-    except requests.RequestException: return None
-
-def get_chart_data(symbol: str, timeframe: str) -> tuple[list, float, float] | None:
-    coin_id = get_coingecko_id(symbol)
-    timeframe_map = {'M15': {'days': 1, 'interval': 'hourly'}, 'M30': {'days': 1, 'interval': 'hourly'}, 'H1': {'days': 1, 'interval': 'hourly'}, 'H4': {'days': 7, 'interval': 'hourly'}, 'D1': {'days': 90, 'interval': 'daily'}, 'W1': {'days': 365, 'interval': 'daily'}}
-    api_params = timeframe_map.get(timeframe.upper(), {'days': 7, 'interval': 'daily'})
-    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
-    params = {'vs_currency': 'usd', 'days': api_params['days'], 'interval': api_params['interval']}
-    try:
-        res = requests.get(url, params=params, timeout=10)
-        if res.status_code != 200: return None
-        data = res.json().get('prices', [])
-        if not data or len(data) < 2: return None
-        current_price = data[-1][1]; start_price = data[0][1]
-        price_change_pct = ((current_price - start_price) / start_price) * 100 if start_price != 0 else 0
-        return data, current_price, price_change_pct
-    except requests.RequestException: return None
-
-def create_chart_url(symbol: str, timeframe: str, chart_data: list, price_change_pct: float) -> str:
-    timestamps = [item[0] for item in chart_data]; prices = [item[1] for item in chart_data]
-    line_color = '#28a745' if price_change_pct >= 0 else '#dc3545'
-    chart_config = {"type": "line", "data": {"labels": [datetime.fromtimestamp(ts/1000).strftime('%d/%m %H:%M') for ts in timestamps], "datasets": [{"label": "Price (USD)", "data": prices, "fill": False, "borderColor": line_color, "borderWidth": 2, "pointRadius": 0}]}, "options": {"title": {"display": True, "text": f"{symbol.upper()}/USD - {timeframe.upper()} Chart"}, "legend": {"display": False}, "scales": {"xAxes": [{"display": False}], "yAxes": [{"gridLines": {"color": "rgba(255, 255, 255, 0.1)"}}]}}}
-    qc_url = "https://quickchart.io/chart/create"
-    payload = {"chart": json.dumps(chart_config), "backgroundColor": "#20232A", "width": 600, "height": 400}
-    try:
-        res = requests.post(qc_url, json=payload, timeout=10)
-        if res.status_code == 200: return res.json().get('url')
-    except requests.RequestException: return None
-    return None
-
-def send_chart_photo(chat_id, photo_url: str, caption: str, reply_to_message_id):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-    payload = {'chat_id': chat_id, 'photo': photo_url, 'caption': caption, 'parse_mode': 'Markdown', 'reply_to_message_id': reply_to_message_id}
-    try: requests.post(url, json=payload, timeout=15)
-    except requests.RequestException as e: print(f"Error sending photo: {e}")
+        response = requests.get(url, params=params, timeout=5)
+        if response.status_code != 200: return None
+        data = response.json()
+        # Dữ liệu trả về có dạng {'bitcoin': {'usd': 60000}}
+        return data.get(coin_id, {}).get('usd')
+    except requests.RequestException:
+        return None
 
 def is_evm_address(s: str) -> bool: return isinstance(s, str) and s.startswith('0x') and len(s) == 42
 def send_telegram_message(chat_id, text, **kwargs):
@@ -200,67 +165,66 @@ app = Flask(__name__)
 
 @app.route('/', methods=['POST'])
 def webhook():
-    if not BOT_TOKEN: return "Server configuration error", 500
+    if not BOT_TOKEN:
+        print("FATAL: TELEGRAM_TOKEN environment variable not set.")
+        return "Server configuration error", 500
+
     data = request.get_json()
+    
     if "callback_query" in data:
         cb = data["callback_query"]; answer_callback_query(cb["id"])
         if cb.get("data") == "refresh_portfolio" and "reply_to_message" in cb["message"]:
             result = process_portfolio_text(cb["message"]["reply_to_message"]["text"])
             if result: edit_telegram_message(cb["message"]["chat"]["id"], cb["message"]["message_id"], text=result, reply_markup=cb["message"]["reply_markup"])
         return jsonify(success=True)
-    if "message" not in data or "text" not in data["message"]: return jsonify(success=True)
+
+    if "message" not in data or "text" not in data["message"]:
+        return jsonify(success=True)
+
     chat_id = data["message"]["chat"]["id"]; msg_id = data["message"]["message_id"]
     text = data["message"]["text"].strip(); parts = text.split(); cmd = parts[0].lower()
 
     if cmd.startswith('/'):
         if cmd == "/start":
+            ### <<< THAY ĐỔI: Cập nhật tin nhắn hướng dẫn
             start_message = (
                 "Chào mừng! Bot đã sẵn sàng.\n\n"
                 "**Chức năng Lịch hẹn:**\n"
-                "`/add DD/MM HH:mm - Tên`\n"
-                "`/list`, `/del <số>`, `/edit <số> ...`\n\n"
+                "`/add DD/MM HH:mm - Tên công việc`\n"
+                "`/list` - Xem danh sách công việc\n"
+                "`/del <số>` - Xóa công việc\n"
+                "`/edit <số> DD/MM HH:mm - Tên mới`\n\n"
                 "**Chức năng Crypto:**\n"
-                "`/gia <ký hiệu>` - Check giá (vd: /gia btc)\n"
-                "`/chart <ký hiệu> [khung]` - Vẽ biểu đồ (vd: /chart btc H4)\n\n"
+                "`/gia <ký hiệu>` - Check giá nhanh (ví dụ: /gia btc)\n\n"
                 "1️⃣ *Tra cứu Token theo Contract*\n"
-                "Chỉ cần gửi địa chỉ contract.\n\n"
+                "Chỉ cần gửi địa chỉ contract của token.\n"
+                "_Ví dụ:_\n`0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c`\n\n"
                 "2️⃣ *Tính Portfolio*\n"
                 "Gửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`"
             )
             send_telegram_message(chat_id, text=start_message)
-        elif cmd == '/add': send_telegram_message(chat_id, text=add_task(chat_id, " ".join(parts[1:])), reply_to_message_id=msg_id)
-        elif cmd == '/list': send_telegram_message(chat_id, text=list_tasks(chat_id), reply_to_message_id=msg_id)
+        elif cmd == '/add':
+            send_telegram_message(chat_id, text=add_task(chat_id, " ".join(parts[1:])), reply_to_message_id=msg_id)
+        elif cmd == '/list':
+            send_telegram_message(chat_id, text=list_tasks(chat_id), reply_to_message_id=msg_id)
         elif cmd == '/del':
-            if len(parts) > 1: send_telegram_message(chat_id, text=delete_task(chat_id, parts[1]), reply_to_message_id=msg_id)
-            else: send_telegram_message(chat_id, text="Cú pháp: `/del <số>`", reply_to_message_id=msg_id)
+            send_telegram_message(chat_id, text=delete_task(chat_id, parts[1]) if len(parts) > 1 else "Cú pháp: `/del <số>`", reply_to_message_id=msg_id)
         elif cmd == '/edit':
             if len(parts) < 3: send_telegram_message(chat_id, text="Cú pháp: `/edit <số> DD/MM HH:mm - Tên mới`", reply_to_message_id=msg_id)
             else: send_telegram_message(chat_id, text=edit_task(chat_id, parts[1], " ".join(parts[2:])), reply_to_message_id=msg_id)
+        ### <<< THAY ĐỔI: Thêm xử lý cho lệnh /gia
         elif cmd == '/gia':
-            if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/gia <ký hiệu>`", reply_to_message_id=msg_id)
+            if len(parts) < 2:
+                send_telegram_message(chat_id, text="Cú pháp: `/gia <ký hiệu>`\nVí dụ: `/gia btc`", reply_to_message_id=msg_id)
             else:
                 price = get_price_by_symbol(parts[1])
-                if price: send_telegram_message(chat_id, text=f"Giá của *{parts[1].upper()}* là: `${price:,.4f}`", reply_to_message_id=msg_id)
-                else: send_telegram_message(chat_id, text=f"❌ Không tìm thấy giá cho `{parts[1]}`.", reply_to_message_id=msg_id)
-        elif cmd == '/chart':
-            if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/chart <ký hiệu> [khung]`", reply_to_message_id=msg_id)
-            else:
-                symbol = parts[1]; timeframe = parts[2] if len(parts) > 2 else 'D1'
-                send_telegram_message(chat_id, text="⏳ Đang tạo biểu đồ, vui lòng chờ...", reply_to_message_id=msg_id)
-                chart_info = get_chart_data(symbol, timeframe)
-                if not chart_info:
-                    edit_telegram_message(chat_id, msg_id + 1, text=f"❌ Không thể lấy dữ liệu biểu đồ cho `{symbol}`.")
-                    return jsonify(success=True)
-                chart_data, current_price, price_change_pct = chart_info
-                chart_url = create_chart_url(symbol, timeframe, chart_data, price_change_pct)
-                requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage", json={'chat_id': chat_id, 'message_id': msg_id + 1})
-                if not chart_url:
-                    send_telegram_message(chat_id, text=f"❌ Lỗi khi tạo ảnh biểu đồ.", reply_to_message_id=msg_id)
+                if price is not None:
+                    send_telegram_message(chat_id, text=f"Giá của *{parts[1].upper()}* là: `${price:,.4f}`", reply_to_message_id=msg_id)
                 else:
-                    caption = f"*{symbol.upper()}/USD* - Khung: *{timeframe.upper()}*\nGiá: *${current_price:,.4f}*\nThay đổi: *{'📈' if price_change_pct >= 0 else '📉'} {price_change_pct:+.2f}%*"
-                    send_chart_photo(chat_id, chart_url, caption, msg_id)
+                    send_telegram_message(chat_id, text=f"❌ Không tìm thấy giá cho ký hiệu `{parts[1]}`.", reply_to_message_id=msg_id)
         return jsonify(success=True)
 
+    # Xử lý tin nhắn thường
     if len(parts) == 1 and is_evm_address(parts[0]):
         send_telegram_message(chat_id, text=find_token_across_networks(parts[0]), reply_to_message_id=msg_id, disable_web_page_preview=True)
     else:
@@ -270,4 +234,5 @@ def webhook():
             send_telegram_message(chat_id, text=portfolio_result, reply_to_message_id=msg_id, reply_markup=json.dumps(refresh_btn))
         else:
             send_telegram_message(chat_id, text="🤔 Cú pháp không hợp lệ. Gửi /start để xem hướng dẫn.", reply_to_message_id=msg_id)
+                
     return jsonify(success=True)
