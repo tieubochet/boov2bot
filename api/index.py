@@ -12,6 +12,10 @@ TIMEZONE = pytz.timezone('Asia/Ho_Chi_Minh')
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CRON_SECRET = os.getenv("CRON_SECRET")
 REMINDER_THRESHOLD_MINUTES = 30
+SYMBOL_TO_ID_MAP = {
+    'btc': 'bitcoin', 'eth': 'ethereum', 'bnb': 'binancecoin', 'sol': 'solana',
+    'xrp': 'ripple', 'doge': 'dogecoin', 'shib': 'shiba-inu'
+}
 
 # --- KẾT NỐI CƠ SỞ DỮ LIỆU (VERCEL KV - REDIS) ---
 try:
@@ -31,11 +35,8 @@ def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | Non
         if not name_part: return None, None
         now = datetime.now(TIMEZONE)
         dt_naive = datetime.strptime(time_part.strip(), '%d/%m %H:%M')
-        return now.replace(
-            month=dt_naive.month, day=dt_naive.day, hour=dt_naive.hour, minute=dt_naive.minute, second=0, microsecond=0
-        ), name_part
-    except ValueError:
-        return None, None
+        return now.replace(month=dt_naive.month, day=dt_naive.day, hour=dt_naive.hour, minute=dt_naive.minute, second=0, microsecond=0), name_part
+    except ValueError: return None, None
 
 def add_task(chat_id, task_string: str) -> str:
     if not kv: return "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
@@ -43,7 +44,6 @@ def add_task(chat_id, task_string: str) -> str:
     if not task_dt or not name_part: return "❌ Cú pháp sai. Dùng: `DD/MM HH:mm - Tên công việc`."
     if task_dt < datetime.now(TIMEZONE): return "❌ Không thể đặt lịch cho quá khứ."
     tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
-    # Thêm cờ 'reminded' để theo dõi trạng thái nhắc nhở
     tasks.append({"time_iso": task_dt.isoformat(), "name": name_part, "reminded": False})
     tasks.sort(key=lambda x: x['time_iso'])
     kv.set(f"tasks:{chat_id}", json.dumps(tasks))
@@ -63,10 +63,7 @@ def edit_task(chat_id, index_str: str, new_task_string: str) -> str:
     task_to_edit_iso = active_tasks[task_index]['time_iso']
     for task in user_tasks:
         if task['time_iso'] == task_to_edit_iso:
-            task['time_iso'] = new_task_dt.isoformat()
-            task['name'] = new_name_part
-            task['reminded'] = False # Reset cờ nhắc nhở khi sửa
-            break
+            task['time_iso'] = new_task_dt.isoformat(); task['name'] = new_name_part; task['reminded'] = False; break
     user_tasks.sort(key=lambda x: x['time_iso'])
     kv.set(f"tasks:{chat_id}", json.dumps(user_tasks))
     return f"✅ Đã sửa công việc số *{task_index + 1}* thành: *{new_name_part}*."
@@ -98,8 +95,7 @@ def delete_task(chat_id, task_index_str: str) -> str:
 
 # --- LOGIC CRYPTO & TIỆN ÍCH BOT ---
 def get_price_by_symbol(symbol: str) -> float | None:
-    symbol_to_id_map = {'btc': 'bitcoin', 'eth': 'ethereum', 'bnb': 'binancecoin','sol': 'solana', 'xrp': 'ripple', 'doge': 'dogecoin', 'shib': 'shiba-inu'}
-    coin_id = symbol_to_id_map.get(symbol.lower(), symbol.lower())
+    coin_id = SYMBOL_TO_ID_MAP.get(symbol.lower(), symbol.lower())
     url = "https://api.coingecko.com/api/v3/simple/price"; params = {'ids': coin_id, 'vs_currencies': 'usd'}
     try:
         response = requests.get(url, params=params, timeout=5)
@@ -108,11 +104,35 @@ def get_price_by_symbol(symbol: str) -> float | None:
     except requests.RequestException: return None
 
 def is_evm_address(s: str) -> bool: return isinstance(s, str) and s.startswith('0x') and len(s) == 42
-def send_telegram_message(chat_id, text, **kwargs):
+
+### <<< THAY ĐỔI: Hàm gửi tin nhắn giờ sẽ trả về message_id ###
+def send_telegram_message(chat_id, text, **kwargs) -> int | None:
+    """Gửi tin nhắn và trả về message_id nếu thành công."""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {'chat_id': chat_id, 'text': text, 'parse_mode': 'Markdown', **kwargs}
-    try: requests.post(url, json=payload, timeout=10)
-    except requests.RequestException as e: print(f"Error sending message: {e}")
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200 and response.json().get('ok'):
+            return response.json().get('result', {}).get('message_id')
+        print(f"Error sending message, response: {response.text}")
+        return None
+    except requests.RequestException as e:
+        print(f"Error sending message: {e}")
+        return None
+
+### <<< THÊM MỚI: Hàm để pin tin nhắn ###
+def pin_telegram_message(chat_id, message_id):
+    """Pin một tin nhắn và thông báo cho tất cả thành viên."""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/pinChatMessage"
+    # disable_notification=False đảm bảo mọi người nhận được thông báo
+    payload = {'chat_id': chat_id, 'message_id': message_id, 'disable_notification': False}
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code != 200:
+            print(f"Error pinning message: {response.text}")
+    except requests.RequestException as e:
+        print(f"Error pinning message: {e}")
+
 def edit_telegram_message(chat_id, msg_id, text, **kwargs):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText"
     payload = {'chat_id': chat_id, 'message_id': msg_id, 'text': text, 'parse_mode': 'Markdown', **kwargs}
@@ -176,9 +196,11 @@ def webhook():
 
     if cmd.startswith('/'):
         if cmd == "/start":
+            ### <<< THAY ĐỔI: Cập nhật tin nhắn hướng dẫn
             start_message = (
                 "Chào mừng! Bot đã sẵn sàng.\n\n"
-                "*Bot sẽ tự động nhắc bạn trước 30 phút khi có lịch hẹn.*\n\n"
+                "*Bot sẽ tự động PIN và THÔNG BÁO nhắc nhở cho cả nhóm trước 30 phút.*\n"
+                "*(Lưu ý: Bot cần có quyền Admin để Pin tin nhắn)*\n\n"
                 "**Chức năng Lịch hẹn:**\n"
                 "`/add DD/MM HH:mm - Tên công việc`\n"
                 "`/list` - Xem danh sách công việc\n"
@@ -190,18 +212,16 @@ def webhook():
                 "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`"
             )
             send_telegram_message(chat_id, text=start_message)
-        elif cmd == '/add':
-            send_telegram_message(chat_id, text=add_task(chat_id, " ".join(parts[1:])), reply_to_message_id=msg_id)
-        elif cmd == '/list':
-            send_telegram_message(chat_id, text=list_tasks(chat_id), reply_to_message_id=msg_id)
+        elif cmd == '/add': send_telegram_message(chat_id, text=add_task(chat_id, " ".join(parts[1:])), reply_to_message_id=msg_id)
+        elif cmd == '/list': send_telegram_message(chat_id, text=list_tasks(chat_id), reply_to_message_id=msg_id)
         elif cmd == '/del':
-            send_telegram_message(chat_id, text=delete_task(chat_id, parts[1]) if len(parts) > 1 else "Cú pháp: `/del <số>`", reply_to_message_id=msg_id)
+            if len(parts) > 1: send_telegram_message(chat_id, text=delete_task(chat_id, parts[1]), reply_to_message_id=msg_id)
+            else: send_telegram_message(chat_id, text="Cú pháp: `/del <số>`", reply_to_message_id=msg_id)
         elif cmd == '/edit':
             if len(parts) < 3: send_telegram_message(chat_id, text="Cú pháp: `/edit <số> DD/MM HH:mm - Tên mới`", reply_to_message_id=msg_id)
             else: send_telegram_message(chat_id, text=edit_task(chat_id, parts[1], " ".join(parts[2:])), reply_to_message_id=msg_id)
         elif cmd == '/gia':
-            if len(parts) < 2:
-                send_telegram_message(chat_id, text="Cú pháp: `/gia <ký hiệu>`", reply_to_message_id=msg_id)
+            if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/gia <ký hiệu>`", reply_to_message_id=msg_id)
             else:
                 price = get_price_by_symbol(parts[1])
                 if price is not None: send_telegram_message(chat_id, text=f"Giá của *{parts[1].upper()}* là: `${price:,.4f}`", reply_to_message_id=msg_id)
@@ -220,8 +240,7 @@ def webhook():
 
 @app.route('/check_reminders', methods=['POST'])
 def cron_webhook():
-    if not kv or not BOT_TOKEN or not CRON_SECRET:
-        return jsonify(error="Server not configured"), 500
+    if not kv or not BOT_TOKEN or not CRON_SECRET: return jsonify(error="Server not configured"), 500
     secret = request.headers.get('X-Cron-Secret') or (request.is_json and request.get_json().get('secret'))
     if secret != CRON_SECRET: return jsonify(error="Unauthorized"), 403
     print(f"[{datetime.now()}] Running reminder check...")
@@ -237,7 +256,13 @@ def cron_webhook():
                 time_until_due = task_time - now
                 if timedelta(seconds=1) < time_until_due <= timedelta(minutes=REMINDER_THRESHOLD_MINUTES):
                     minutes_left = int(time_until_due.total_seconds() / 60)
-                    send_telegram_message(chat_id, text=f"‼️ *NHẮC NHỞ* ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa.")
+                    reminder_text = f"‼️ *NHẮC NHỞ* ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
+                    
+                    ### <<< THAY ĐỔI: Gửi và Pin tin nhắn ###
+                    sent_message_id = send_telegram_message(chat_id, text=reminder_text)
+                    if sent_message_id:
+                        pin_telegram_message(chat_id, sent_message_id)
+                    
                     task['reminded'] = True
                     tasks_changed = True
                     reminders_sent += 1
