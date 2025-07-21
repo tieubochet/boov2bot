@@ -198,9 +198,7 @@ def webhook():
         if cmd == "/start":
             ### <<< THAY ĐỔI: Cập nhật tin nhắn hướng dẫn
             start_message = (
-                "Chào mừng! Bot đã sẵn sàng.\n\n"
-                "*Bot sẽ tự động PIN và THÔNG BÁO nhắc nhở cho cả nhóm trước 30 phút.*\n"
-                "*(Lưu ý: Bot cần có quyền Admin để Pin tin nhắn)*\n\n"
+                "Gòi, cần gì fen?\n\n"
                 "**Chức năng Lịch hẹn:**\n"
                 "`/add DD/MM HH:mm - Tên công việc`\n"
                 "`/list` - Xem danh sách công việc\n"
@@ -208,7 +206,7 @@ def webhook():
                 "`/edit <số> DD/MM HH:mm - Tên mới`\n\n"
                 "**Chức năng Crypto:**\n"
                 "`/gia <ký hiệu>` - Check giá nhanh (ví dụ: /gia btc)\n\n"
-                "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract.\n"
+                "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract.\n\n"
                 "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`"
             )
             send_telegram_message(chat_id, text=start_message)
