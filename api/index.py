@@ -13,9 +13,10 @@ BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 # --- KẾT NỐI CƠ SỞ DỮ LIỆU (VERCEL KV - REDIS) ---
 try:
+    # Sử dụng biến môi trường tùy chỉnh như trong code bạn cung cấp
     kv_url = os.getenv("teeboov2_REDIS_URL")
     if not kv_url:
-        raise ValueError("KV_URL is not set. Please connect a Vercel KV store to save tasks.")
+        raise ValueError("teeboov2_REDIS_URL is not set. Please connect a Vercel KV store.")
     kv = Redis.from_url(kv_url, decode_responses=True)
 except Exception as e:
     print(f"FATAL: Could not connect to Redis. Task features will be disabled. Error: {e}")
@@ -29,8 +30,11 @@ def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | Non
         if not name_part: return None, None
         now = datetime.now(TIMEZONE)
         dt_naive = datetime.strptime(time_part.strip(), '%d/%m %H:%M')
-        return now.replace(month=dt_naive.month, day=dt_naive.day, hour=dt_naive.hour, minute=dt_naive.minute, second=0, microsecond=0), name_part
-    except ValueError: return None, None
+        return now.replace(
+            month=dt_naive.month, day=dt_naive.day, hour=dt_naive.hour, minute=dt_naive.minute, second=0, microsecond=0
+        ), name_part
+    except ValueError:
+        return None, None
 
 def add_task(chat_id, task_string: str) -> str:
     if not kv: return "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
@@ -57,7 +61,9 @@ def edit_task(chat_id, index_str: str, new_task_string: str) -> str:
     task_to_edit_iso = active_tasks[task_index]['time_iso']
     for task in user_tasks:
         if task['time_iso'] == task_to_edit_iso:
-            task['time_iso'] = new_task_dt.isoformat(); task['name'] = new_name_part; break
+            task['time_iso'] = new_task_dt.isoformat()
+            task['name'] = new_name_part
+            break
     user_tasks.sort(key=lambda x: x['time_iso'])
     kv.set(f"tasks:{chat_id}", json.dumps(user_tasks))
     return f"✅ Đã sửa công việc số *{task_index + 1}* thành: *{new_name_part}*."
@@ -88,24 +94,18 @@ def delete_task(chat_id, task_index_str: str) -> str:
     return f"✅ Đã xóa lịch hẹn: *{task_to_delete['name']}*"
 
 # --- LOGIC CRYPTO & TIỆN ÍCH BOT ---
-### <<< THÊM MỚI: Chức năng lấy giá bằng ký hiệu từ CoinGecko ###
 def get_price_by_symbol(symbol: str) -> float | None:
-    """Lấy giá của một token bằng ký hiệu (ví dụ: btc, eth) từ CoinGecko."""
-    # Bản đồ chuyển đổi các ký hiệu phổ biến sang ID của CoinGecko
     symbol_to_id_map = {
         'btc': 'bitcoin', 'eth': 'ethereum', 'bnb': 'binancecoin',
         'sol': 'solana', 'xrp': 'ripple', 'doge': 'dogecoin', 'shib': 'shiba-inu'
     }
-    # Sử dụng ID đã map nếu có, nếu không thì dùng chính ký hiệu người dùng nhập (viết thường)
     coin_id = symbol_to_id_map.get(symbol.lower(), symbol.lower())
-    
     url = "https://api.coingecko.com/api/v3/simple/price"
     params = {'ids': coin_id, 'vs_currencies': 'usd'}
     try:
         response = requests.get(url, params=params, timeout=5)
         if response.status_code != 200: return None
         data = response.json()
-        # Dữ liệu trả về có dạng {'bitcoin': {'usd': 60000}}
         return data.get(coin_id, {}).get('usd')
     except requests.RequestException:
         return None
@@ -186,7 +186,6 @@ def webhook():
 
     if cmd.startswith('/'):
         if cmd == "/start":
-            ### <<< THAY ĐỔI: Cập nhật tin nhắn hướng dẫn
             start_message = (
                 "Chào mừng! Bot đã sẵn sàng.\n\n"
                 "**Chức năng Lịch hẹn:**\n"
@@ -212,7 +211,6 @@ def webhook():
         elif cmd == '/edit':
             if len(parts) < 3: send_telegram_message(chat_id, text="Cú pháp: `/edit <số> DD/MM HH:mm - Tên mới`", reply_to_message_id=msg_id)
             else: send_telegram_message(chat_id, text=edit_task(chat_id, parts[1], " ".join(parts[2:])), reply_to_message_id=msg_id)
-        ### <<< THAY ĐỔI: Thêm xử lý cho lệnh /gia
         elif cmd == '/gia':
             if len(parts) < 2:
                 send_telegram_message(chat_id, text="Cú pháp: `/gia <ký hiệu>`\nVí dụ: `/gia btc`", reply_to_message_id=msg_id)
