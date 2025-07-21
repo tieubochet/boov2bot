@@ -149,6 +149,7 @@ def find_token_across_networks(address: str) -> str:
                         f"🔗 [Xem trên GeckoTerminal](https://www.geckoterminal.com/{network}/tokens/{address})\n\n`{address}`")
         except requests.RequestException: continue
     return f"❌ Không tìm thấy token với địa chỉ `{address[:10]}...`."
+
 def process_portfolio_text(message_text: str) -> str | None:
     lines = message_text.strip().split('\n'); total_value, result_lines, valid_lines_count = 0.0, [], 0
     for line in lines:
@@ -156,9 +157,15 @@ def process_portfolio_text(message_text: str) -> str | None:
         if len(parts) != 3: continue
         try: amount = float(parts[0])
         except ValueError: continue
-        valid_lines_count += 1
+        
         address, network = parts[1], parts[2]
-        url = f"https://api.geckoterminal.com/api/v2/networks/{network.lower()}/tokens/{address.lower()}"
+        ### <<< THAY ĐỔI: Thêm kiểm tra định dạng địa chỉ trong portfolio ###
+        if not is_crypto_address(address):
+            result_lines.append(f"❌ Địa chỉ `{address[:10]}...` không hợp lệ.")
+            continue
+            
+        valid_lines_count += 1
+        url = f"https://api.geckoterminal.com/api/v2/networks/{network.lower()}/tokens/{address}"
         try:
             res = requests.get(url, headers={"accept": "application/json"}, timeout=5)
             if res.status_code == 200:
@@ -191,13 +198,13 @@ def webhook():
         if cmd == "/start":
             ### <<< THAY ĐỔI: Cập nhật tin nhắn hướng dẫn
             start_message = (
-                "Bot hiện lên và nói:\n\n"
+                "Gòi, cần gì fen?\n\n"
                 "**Chức năng Lịch hẹn:**\n"
                 "`/add DD/MM HH:mm - Tên công việc`\n"
                 "`/list`, `/del <số>`, `/edit <số> ...`\n\n"
                 "**Chức năng Crypto:**\n"
-                "`/gia <ký hiệu>` - Check giá nhanh (ví dụ: /gia btc)\n\n"
-                "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract (hỗ trợ EVM & Tron).\n"
+                "`/gia <ký hiệu>`\n\n"
+                "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract.\n"
                 "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`"
             )
             send_telegram_message(chat_id, text=start_message)
