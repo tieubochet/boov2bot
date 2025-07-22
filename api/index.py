@@ -7,7 +7,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 import pytz
 from redis import Redis
-import google.generativeai as genai # <<< THÊM MỚI
+import google.generativeai as genai
 
 # --- CẤU HÌNH ---
 AUTO_SEARCH_NETWORKS = ['bsc', 'eth', 'tron', 'polygon', 'arbitrum', 'base']
@@ -18,8 +18,14 @@ REMINDER_THRESHOLD_MINUTES = 30
 SYMBOL_TO_ID_MAP = {'btc': 'bitcoin', 'eth': 'ethereum', 'bnb': 'binancecoin', 'sol': 'solana'}
 # Biến môi trường mới cho Google Gemini
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+
+# Cấu hình thư viện Google Gemini một cách an toàn
 if GOOGLE_API_KEY:
-    genai.configure(api_key=GOOGLE_API_KEY)
+    try:
+        genai.configure(api_key=GOOGLE_API_KEY)
+    except Exception as e:
+        print(f"Error configuring Google Gemini: {e}")
+        GOOGLE_API_KEY = None # Vô hiệu hóa nếu cấu hình lỗi
 
 # --- KẾT NỐI CƠ SỞ DỮ LIỆU ---
 try:
@@ -77,7 +83,7 @@ def list_tasks(chat_id) -> str:
     return "\n".join(result_lines)
 def delete_task(chat_id, task_index_str: str) -> str:
     if not kv: return "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
-    try: task_index = int(index_str) - 1; assert task_index >= 0
+    try: task_index = int(task_index_str) - 1; assert task_index >= 0
     except (ValueError, AssertionError): return "❌ Số thứ tự không hợp lệ."
     user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
     active_tasks = [t for t in user_tasks if datetime.fromisoformat(t['time_iso']) > datetime.now(TIMEZONE)]
@@ -99,11 +105,10 @@ def get_price_by_symbol(symbol: str) -> float | None:
 def get_crypto_explanation(query: str) -> str:
     """Lấy giải thích về thuật ngữ crypto từ Google Gemini."""
     if not GOOGLE_API_KEY:
-        return "❌ Lỗi cấu hình: Thiếu GOOGLE_API_KEY. Vui lòng liên hệ admin."
+        return "❌ Lỗi cấu hình: Thiếu `GOOGLE_API_KEY`. Vui lòng liên hệ admin để thiết lập."
     
     try:
         model = genai.GenerativeModel('gemini-1.0-pro-latest')
-        # Thêm context để câu trả lời được tập trung và chất lượng hơn
         full_prompt = (
             "Bạn là một trợ lý chuyên gia về tiền điện tử. Hãy trả lời câu hỏi sau một cách "
             "ngắn gọn, súc tích, và dễ hiểu bằng tiếng Việt cho người mới bắt đầu. "
@@ -111,9 +116,17 @@ def get_crypto_explanation(query: str) -> str:
             f"Câu hỏi: {query}"
         )
         response = model.generate_content(full_prompt)
-        return response.text
+        # Kiểm tra xem có nội dung trả về không
+        if response.parts:
+            return response.text
+        else:
+            # Điều này xảy ra nếu nội dung bị bộ lọc an toàn chặn
+            return "❌ Không thể tạo câu trả lời cho câu hỏi này. Có thể nội dung đã vi phạm chính sách an toàn."
+            
     except Exception as e:
+        # In lỗi chi tiết ra log của Vercel để debug
         print(f"Google Gemini API Error: {e}")
+        # Trả về thông báo lỗi chung cho người dùng
         return f"❌ Đã xảy ra lỗi khi kết nối với dịch vụ giải thích. Vui lòng thử lại sau."
 
 def is_evm_address(s: str) -> bool: return isinstance(s, str) and s.startswith('0x') and len(s) == 42
