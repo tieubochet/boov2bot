@@ -211,16 +211,14 @@ def webhook():
     text = data["message"]["text"].strip(); parts = text.split(); cmd = parts[0].lower()
     if cmd.startswith('/'):
         if cmd == "/start":
-            start_message = ("Chào mừng! Bot đã sẵn sàng.\n\n"
-                             "*Bot sẽ tự động PIN và THÔNG BÁO nhắc nhở cho cả nhóm.*\n"
-                             "*(Lưu ý: Bot cần có quyền Admin để Pin tin nhắn)*\n\n"
+            start_message = ("Gòi, cần gì fen?\n\n"
                              "**Chức năng Lịch hẹn:**\n"
                              "`/add DD/MM HH:mm - Tên`\n"
                              "`/list`, `/del <số>`, `/edit <số> ...`\n\n"
                              "**Chức năng Crypto:**\n"
                              "`/gia <ký hiệu>`\n"
                              "`/gt <thuật ngữ>` - Giải thích (vd: /gt airdrop là gì)\n\n"
-                             "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract (hỗ trợ EVM & Tron).\n"
+                             "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract.\n"
                              "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`")
             send_telegram_message(chat_id, text=start_message)
         elif cmd == '/add': send_telegram_message(chat_id, text=add_task(chat_id, " ".join(parts[1:])), reply_to_message_id=msg_id)
@@ -254,7 +252,7 @@ def webhook():
         if portfolio_result:
             refresh_btn = {'inline_keyboard': [[{'text': '🔄 Refresh', 'callback_data': 'refresh_portfolio'}]]}
             send_telegram_message(chat_id, text=portfolio_result, reply_to_message_id=msg_id, reply_markup=json.dumps(refresh_btn))
-        else: send_telegram_message(chat_id, text="🤔 Cú pháp không hợp lệ. Gửi /start để xem hướng dẫn.", reply_to_message_id=msg_id)
+        #else: send_telegram_message(chat_id, text="🤔 Cú pháp không hợp lệ. Gửi /start để xem hướng dẫn.", reply_to_message_id=msg_id)
     return jsonify(success=True)
 
 @app.route('/check_reminders', methods=['POST'])
