@@ -109,8 +109,10 @@ def get_crypto_explanation(query: str) -> str:
         model = genai.GenerativeModel('gemini-2.5-pro')
         full_prompt = (
             "Bạn là một trợ lý chuyên gia về tiền điện tử. Hãy trả lời câu hỏi sau một cách "
-            "ngắn gọn, súc tích, và dễ hiểu bằng tiếng Việt cho người mới bắt đầu. "
-            "Tập trung vào các khía cạnh quan trọng nhất.\n\n"
+            "ngắn gọn, súc tích và dễ hiểu bằng tiếng Việt cho người mới bắt đầu. "
+            "Tập trung vào các khái niệm cơ bản và quan trọng nhất. "
+            "Chỉ cung cấp thông tin chính xác và đã được kiểm chứng; không suy đoán hoặc đưa ra thông tin không chính xác. "
+            "Nếu bạn không chắc chắn về câu trả lời, hãy nói rằng bạn không biết.\n\n"
             f"Câu hỏi: {query}"
         )
         response = model.generate_content(full_prompt)
