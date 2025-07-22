@@ -1,6 +1,8 @@
 import os
 import json
 import requests
+import hashlib
+import hmac
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 import pytz
@@ -12,36 +14,28 @@ TIMEZONE = pytz.timezone('Asia/Ho_Chi_Minh')
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CRON_SECRET = os.getenv("CRON_SECRET")
 REMINDER_THRESHOLD_MINUTES = 30
-SYMBOL_TO_ID_MAP = {
-    'btc': 'bitcoin', 'eth': 'ethereum', 'bnb': 'binancecoin', 'sol': 'solana',
-    'xrp': 'ripple', 'doge': 'dogecoin', 'shib': 'shiba-inu'
-}
+SYMBOL_TO_ID_MAP = {'btc': 'bitcoin', 'eth': 'ethereum', 'bnb': 'binancecoin', 'sol': 'solana'}
+# Biến môi trường mới cho OpenAI
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# --- KẾT NỐI CƠ SỞ DỮ LIỆU (VERCEL KV - REDIS) ---
+# --- KẾT NỐI CƠ SỞ DỮ LIỆU ---
 try:
     kv_url = os.getenv("teeboov2_REDIS_URL")
-    if not kv_url:
-        raise ValueError("teeboov2_REDIS_URL is not set. Please connect a Vercel KV store.")
+    if not kv_url: raise ValueError("teeboov2_REDIS_URL is not set.")
     kv = Redis.from_url(kv_url, decode_responses=True)
 except Exception as e:
-    print(f"FATAL: Could not connect to Redis. Task features will be disabled. Error: {e}")
-    kv = None
+    print(f"FATAL: Could not connect to Redis. Error: {e}"); kv = None
 
-# --- LOGIC QUẢN LÝ CÔNG VIỆC ---
+# --- LOGIC QUẢN LÝ CÔNG VIỆC (Không thay đổi) ---
 def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | None]:
-    """Phân tích cú pháp chuỗi 'DD/MM HH:mm - Tên' thành (datetime, name)."""
     try:
         time_part, name_part = task_string.split(' - ', 1)
         name_part = name_part.strip()
         if not name_part: return None, None
         now = datetime.now(TIMEZONE)
         dt_naive = datetime.strptime(time_part.strip(), '%d/%m %H:%M')
-        return now.replace(
-            month=dt_naive.month, day=dt_naive.day, hour=dt_naive.hour, minute=dt_naive.minute, second=0, microsecond=0
-        ), name_part
-    except ValueError:
-        return None, None
-
+        return now.replace(month=dt_naive.month, day=dt_naive.day, hour=dt_naive.hour, minute=dt_naive.minute, second=0, microsecond=0), name_part
+    except ValueError: return None, None
 def add_task(chat_id, task_string: str) -> str:
     if not kv: return "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
     task_dt, name_part = parse_task_from_string(task_string)
@@ -52,13 +46,10 @@ def add_task(chat_id, task_string: str) -> str:
     tasks.sort(key=lambda x: x['time_iso'])
     kv.set(f"tasks:{chat_id}", json.dumps(tasks))
     return f"✅ Đã thêm lịch: *{name_part}* lúc *{task_dt.strftime('%H:%M %d/%m/%Y')}*."
-
 def edit_task(chat_id, index_str: str, new_task_string: str) -> str:
     if not kv: return "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
-    try:
-        task_index = int(index_str) - 1
-        if task_index < 0: raise ValueError
-    except ValueError: return "❌ Số thứ tự không hợp lệ."
+    try: task_index = int(index_str) - 1; assert task_index >= 0
+    except (ValueError, AssertionError): return "❌ Số thứ tự không hợp lệ."
     new_task_dt, new_name_part = parse_task_from_string(new_task_string)
     if not new_task_dt or not new_name_part: return "❌ Cú pháp công việc mới không hợp lệ. Dùng: `DD/MM HH:mm - Tên công việc`."
     user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
@@ -71,7 +62,6 @@ def edit_task(chat_id, index_str: str, new_task_string: str) -> str:
     user_tasks.sort(key=lambda x: x['time_iso'])
     kv.set(f"tasks:{chat_id}", json.dumps(user_tasks))
     return f"✅ Đã sửa công việc số *{task_index + 1}* thành: *{new_name_part}*."
-
 def list_tasks(chat_id) -> str:
     if not kv: return "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
     user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
@@ -82,13 +72,10 @@ def list_tasks(chat_id) -> str:
     for i, task in enumerate(active_tasks):
         result_lines.append(f"*{i+1}.* `{datetime.fromisoformat(task['time_iso']).strftime('%H:%M %d/%m')}` - {task['name']}")
     return "\n".join(result_lines)
-
 def delete_task(chat_id, task_index_str: str) -> str:
     if not kv: return "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
-    try:
-        task_index = int(task_index_str) - 1
-        if task_index < 0: raise ValueError
-    except ValueError: return "❌ Số thứ tự không hợp lệ."
+    try: task_index = int(task_index_str) - 1; assert task_index >= 0
+    except (ValueError, AssertionError): return "❌ Số thứ tự không hợp lệ."
     user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
     active_tasks = [t for t in user_tasks if datetime.fromisoformat(t['time_iso']) > datetime.now(TIMEZONE)]
     if task_index >= len(active_tasks): return "❌ Số thứ tự không hợp lệ."
@@ -102,39 +89,61 @@ def get_price_by_symbol(symbol: str) -> float | None:
     coin_id = SYMBOL_TO_ID_MAP.get(symbol.lower(), symbol.lower())
     url = "https://api.coingecko.com/api/v3/simple/price"; params = {'ids': coin_id, 'vs_currencies': 'usd'}
     try:
-        response = requests.get(url, params=params, timeout=5)
-        if response.status_code != 200: return None
-        return response.json().get(coin_id, {}).get('usd')
+        res = requests.get(url, params=params, timeout=10)
+        return res.json().get(coin_id, {}).get('usd') if res.status_code == 200 else None
     except requests.RequestException: return None
+
+def get_crypto_explanation(query: str) -> str:
+    """Lấy giải thích về thuật ngữ crypto từ OpenAI."""
+    if not OPENAI_API_KEY:
+        return "❌ Lỗi cấu hình: Thiếu OPENAI_API_KEY. Vui lòng liên hệ admin."
+    
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    system_prompt = "Bạn là một trợ lý chuyên gia về tiền điện tử. Hãy trả lời các câu hỏi một cách ngắn gọn, súc tích, và dễ hiểu bằng tiếng Việt. Tập trung vào các khía cạnh quan trọng nhất."
+    payload = {
+        "model": "gpt-3.5-turbo",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": query}
+        ],
+        "max_tokens": 250,
+        "temperature": 0.5
+    }
+    try:
+        res = requests.post(url, headers=headers, json=payload, timeout=25)
+        if res.status_code == 200:
+            return res.json()['choices'][0]['message']['content'].strip()
+        else:
+            error_details = res.json().get('error', {}).get('message', res.text)
+            print(f"OpenAI API Error: {error_details}")
+            return f"❌ Lỗi từ API giải thích: {error_details}"
+    except requests.RequestException as e:
+        print(f"Request exception to OpenAI: {e}")
+        return "❌ Lỗi mạng khi kết nối đến dịch vụ giải thích."
 
 def is_evm_address(s: str) -> bool: return isinstance(s, str) and s.startswith('0x') and len(s) == 42
 def is_tron_address(s: str) -> bool: return isinstance(s, str) and s.startswith('T') and len(s) == 34
-def is_crypto_address(s: str) -> bool:
-    return is_evm_address(s) or is_tron_address(s)
-
+def is_crypto_address(s: str) -> bool: return is_evm_address(s) or is_tron_address(s)
 def send_telegram_message(chat_id, text, **kwargs) -> int | None:
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {'chat_id': chat_id, 'text': text, 'parse_mode': 'Markdown', **kwargs}
     try:
         response = requests.post(url, json=payload, timeout=10)
-        if response.status_code == 200 and response.json().get('ok'):
-            return response.json().get('result', {}).get('message_id')
-        print(f"Error sending message, response: {response.text}")
-        return None
+        if response.status_code == 200 and response.json().get('ok'): return response.json().get('result', {}).get('message_id')
+        print(f"Error sending message, response: {response.text}"); return None
     except requests.RequestException as e:
-        print(f"Error sending message: {e}")
-        return None
-
+        print(f"Error sending message: {e}"); return None
 def pin_telegram_message(chat_id, message_id):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/pinChatMessage"
     payload = {'chat_id': chat_id, 'message_id': message_id, 'disable_notification': False}
     try:
         response = requests.post(url, json=payload, timeout=10)
-        if response.status_code != 200:
-            print(f"Error pinning message: {response.text}")
-    except requests.RequestException as e:
-        print(f"Error pinning message: {e}")
-
+        if response.status_code != 200: print(f"Error pinning message: {response.text}")
+    except requests.RequestException as e: print(f"Error pinning message: {e}")
 def edit_telegram_message(chat_id, msg_id, text, **kwargs):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText"
     payload = {'chat_id': chat_id, 'message_id': msg_id, 'text': text, 'parse_mode': 'Markdown', **kwargs}
@@ -148,7 +157,7 @@ def find_token_across_networks(address: str) -> str:
     for network in AUTO_SEARCH_NETWORKS:
         url = f"https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{address}?include=top_pools"
         try:
-            res = requests.get(url, headers={"accept": "application/json"}, timeout=5)
+            res = requests.get(url, headers={"accept": "application/json"}, timeout=10)
             if res.status_code == 200:
                 data = res.json(); token_attr = data.get('data', {}).get('attributes', {})
                 price = float(token_attr.get('price_usd', 0)); change = float(token_attr.get('price_change_percentage', {}).get('h24', 0))
@@ -171,7 +180,7 @@ def process_portfolio_text(message_text: str) -> str | None:
         valid_lines_count += 1
         url = f"https://api.geckoterminal.com/api/v2/networks/{network.lower()}/tokens/{address}"
         try:
-            res = requests.get(url, headers={"accept": "application/json"}, timeout=5)
+            res = requests.get(url, headers={"accept": "application/json"}, timeout=10)
             if res.status_code == 200:
                 attr = res.json().get('data', {}).get('attributes', {}); price = float(attr.get('price_usd', 0)); symbol = attr.get('symbol', 'N/A')
                 value = amount * price; total_value += value
@@ -183,7 +192,6 @@ def process_portfolio_text(message_text: str) -> str | None:
 
 # --- WEB SERVER (FLASK) ---
 app = Flask(__name__)
-
 @app.route('/', methods=['POST'])
 def webhook():
     if not BOT_TOKEN: return "Server configuration error", 500
@@ -197,19 +205,17 @@ def webhook():
     if "message" not in data or "text" not in data["message"]: return jsonify(success=True)
     chat_id = data["message"]["chat"]["id"]; msg_id = data["message"]["message_id"]
     text = data["message"]["text"].strip(); parts = text.split(); cmd = parts[0].lower()
-
     if cmd.startswith('/'):
         if cmd == "/start":
-            start_message = (
-                "Gòi, cần gì fen?\n\n"
-                "**Chức năng Lịch hẹn:**\n"
-                "`/add DD/MM HH:mm - Tên công việc`\n"
-                "`/list`, `/del <số>`, `/edit <số> ...`\n\n"
-                "**Chức năng Crypto:**\n"
-                "`/gia <ký hiệu>` - Check giá nhanh (ví dụ: /gia btc)\n\n"
-                "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract.\n"
-                "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`"
-            )
+            start_message = ("Gòi, cần gì fen?\n\n"
+                             "**Chức năng Lịch hẹn:**\n"
+                             "`/add DD/MM HH:mm - Tên`\n"
+                             "`/list`, `/del <số>`, `/edit <số> ...`\n\n"
+                             "**Chức năng Crypto:**\n"
+                             "`/gia <ký hiệu>`\n"
+                             "`/gt <thuật ngữ>` - Giải thích (vd: /gt airdrop là gì)\n\n"
+                             "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract (hỗ trợ EVM & Tron).\n"
+                             "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`")
             send_telegram_message(chat_id, text=start_message)
         elif cmd == '/add': send_telegram_message(chat_id, text=add_task(chat_id, " ".join(parts[1:])), reply_to_message_id=msg_id)
         elif cmd == '/list': send_telegram_message(chat_id, text=list_tasks(chat_id), reply_to_message_id=msg_id)
@@ -223,10 +229,18 @@ def webhook():
             if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/gia <ký hiệu>`", reply_to_message_id=msg_id)
             else:
                 price = get_price_by_symbol(parts[1])
-                if price is not None: send_telegram_message(chat_id, text=f"Giá của *{parts[1].upper()}* là: `${price:,.4f}`", reply_to_message_id=msg_id)
-                else: send_telegram_message(chat_id, text=f"❌ Không tìm thấy giá cho ký hiệu `{parts[1]}`.", reply_to_message_id=msg_id)
+                if price: send_telegram_message(chat_id, text=f"Giá của *{parts[1].upper()}* là: `${price:,.4f}`", reply_to_message_id=msg_id)
+                else: send_telegram_message(chat_id, text=f"❌ Không tìm thấy giá cho `{parts[1]}`.", reply_to_message_id=msg_id)
+        elif cmd == '/gt':
+            if len(parts) < 2:
+                send_telegram_message(chat_id, text="Cú pháp: `/gt <câu hỏi>`\nVí dụ: `/gt airdrop là gì?`", reply_to_message_id=msg_id)
+            else:
+                query = " ".join(parts[1:])
+                temp_msg_id = send_telegram_message(chat_id, text="🤔 Đang tìm hiểu, vui lòng chờ...", reply_to_message_id=msg_id)
+                if temp_msg_id:
+                    explanation = get_crypto_explanation(query)
+                    edit_telegram_message(chat_id, temp_msg_id, text=explanation)
         return jsonify(success=True)
-
     if len(parts) == 1 and is_crypto_address(parts[0]):
         send_telegram_message(chat_id, text=find_token_across_networks(parts[0]), reply_to_message_id=msg_id, disable_web_page_preview=True)
     else:
@@ -245,10 +259,8 @@ def cron_webhook():
     print(f"[{datetime.now()}] Running reminder check...")
     reminders_sent = 0
     for key in kv.scan_iter("tasks:*"):
-        chat_id = key.split(':')[1]
-        user_tasks = json.loads(kv.get(key) or '[]')
-        tasks_changed = False
-        now = datetime.now(TIMEZONE)
+        chat_id = key.split(':')[1]; user_tasks = json.loads(kv.get(key) or '[]')
+        tasks_changed = False; now = datetime.now(TIMEZONE)
         for task in user_tasks:
             if not task.get("reminded", False):
                 task_time = datetime.fromisoformat(task['time_iso'])
@@ -256,14 +268,9 @@ def cron_webhook():
                 if timedelta(seconds=1) < time_until_due <= timedelta(minutes=REMINDER_THRESHOLD_MINUTES):
                     minutes_left = int(time_until_due.total_seconds() / 60)
                     reminder_text = f"‼️ *NHẮC NHỞ * ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
-                    
                     sent_message_id = send_telegram_message(chat_id, text=reminder_text)
-                    if sent_message_id:
-                        pin_telegram_message(chat_id, sent_message_id)
-                    
-                    task['reminded'] = True
-                    tasks_changed = True
-                    reminders_sent += 1
+                    if sent_message_id: pin_telegram_message(chat_id, sent_message_id)
+                    task['reminded'] = True; tasks_changed = True; reminders_sent += 1
         if tasks_changed:
             kv.set(key, json.dumps(user_tasks))
     result = {"status": "success", "reminders_sent": reminders_sent}
