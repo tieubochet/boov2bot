@@ -108,7 +108,7 @@ def get_crypto_explanation(query: str) -> str:
         return "❌ Lỗi cấu hình: Thiếu `GOOGLE_API_KEY`. Vui lòng liên hệ admin để thiết lập."
     
     try:
-        model = genai.GenerativeModel('gemini-1.0-pro-latest')
+        model = genai.GenerativeModel('gemini-2.5-pro')
         full_prompt = (
             "Bạn là một trợ lý chuyên gia về tiền điện tử. Hãy trả lời câu hỏi sau một cách "
             "ngắn gọn, súc tích, và dễ hiểu bằng tiếng Việt cho người mới bắt đầu. "
