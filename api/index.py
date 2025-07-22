@@ -15,17 +15,18 @@ TIMEZONE = pytz.timezone('Asia/Ho_Chi_Minh')
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CRON_SECRET = os.getenv("CRON_SECRET")
 REMINDER_THRESHOLD_MINUTES = 30
-SYMBOL_TO_ID_MAP = {'btc': 'bitcoin', 'eth': 'ethereum', 'bnb': 'binancecoin', 'sol': 'solana'}
-# Biến môi trường mới cho Google Gemini
+SYMBOL_TO_ID_MAP = {
+    'btc': 'bitcoin', 'eth': 'ethereum', 'bnb': 'binancecoin', 'sol': 'solana',
+    'xrp': 'ripple', 'doge': 'dogecoin', 'shib': 'shiba-inu'
+}
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
-# Cấu hình thư viện Google Gemini một cách an toàn
 if GOOGLE_API_KEY:
     try:
         genai.configure(api_key=GOOGLE_API_KEY)
     except Exception as e:
         print(f"Error configuring Google Gemini: {e}")
-        GOOGLE_API_KEY = None # Vô hiệu hóa nếu cấu hình lỗi
+        GOOGLE_API_KEY = None
 
 # --- KẾT NỐI CƠ SỞ DỮ LIỆU ---
 try:
@@ -101,12 +102,9 @@ def get_price_by_symbol(symbol: str) -> float | None:
         res = requests.get(url, params=params, timeout=10)
         return res.json().get(coin_id, {}).get('usd') if res.status_code == 200 else None
     except requests.RequestException: return None
-
 def get_crypto_explanation(query: str) -> str:
-    """Lấy giải thích về thuật ngữ crypto từ Google Gemini."""
     if not GOOGLE_API_KEY:
         return "❌ Lỗi cấu hình: Thiếu `GOOGLE_API_KEY`. Vui lòng liên hệ admin để thiết lập."
-    
     try:
         model = genai.GenerativeModel('gemini-2.5-pro')
         full_prompt = (
@@ -116,18 +114,32 @@ def get_crypto_explanation(query: str) -> str:
             f"Câu hỏi: {query}"
         )
         response = model.generate_content(full_prompt)
-        # Kiểm tra xem có nội dung trả về không
-        if response.parts:
-            return response.text
-        else:
-            # Điều này xảy ra nếu nội dung bị bộ lọc an toàn chặn
-            return "❌ Không thể tạo câu trả lời cho câu hỏi này. Có thể nội dung đã vi phạm chính sách an toàn."
-            
+        if response.parts: return response.text
+        else: return "❌ Không thể tạo câu trả lời cho câu hỏi này. Có thể nội dung đã vi phạm chính sách an toàn."
     except Exception as e:
-        # In lỗi chi tiết ra log của Vercel để debug
         print(f"Google Gemini API Error: {e}")
-        # Trả về thông báo lỗi chung cho người dùng
         return f"❌ Đã xảy ra lỗi khi kết nối với dịch vụ giải thích. Vui lòng thử lại sau."
+
+### <<< THÊM MỚI: Hàm logic cho /calc ###
+def calculate_value(parts: list) -> str:
+    """Xử lý lệnh /calc."""
+    if len(parts) != 3:
+        return "Cú pháp: `/calc <ký hiệu> <số lượng>`\nVí dụ: `/calc btc 0.5`"
+    
+    symbol = parts[1]
+    amount_str = parts[2]
+    
+    try:
+        amount = float(amount_str)
+    except ValueError:
+        return f"❌ Số lượng không hợp lệ: `{amount_str}`"
+        
+    price = get_price_by_symbol(symbol)
+    if price is None:
+        return f"❌ Không tìm thấy giá cho ký hiệu `{symbol}`."
+        
+    total_value = price * amount
+    return f"*{symbol.upper()}*: `${price:,.2f}` x {amount_str} = *${total_value:,.2f}*"
 
 def is_evm_address(s: str) -> bool: return isinstance(s, str) and s.startswith('0x') and len(s) == 42
 def is_tron_address(s: str) -> bool: return isinstance(s, str) and s.startswith('T') and len(s) == 34
@@ -217,7 +229,8 @@ def webhook():
                              "`/list`, `/del <số>`, `/edit <số> ...`\n\n"
                              "**Chức năng Crypto:**\n"
                              "`/gia <ký hiệu>`\n"
-                             "`/gt <thuật ngữ>` - Giải thích (vd: /gt airdrop là gì)\n\n"
+                             "`/calc <ký hiệu> <số lượng>`\n"
+                             "`/gt <thuật ngữ>` - Giải thích\n\n"
                              "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract.\n"
                              "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`")
             send_telegram_message(chat_id, text=start_message)
@@ -237,13 +250,16 @@ def webhook():
                 else: send_telegram_message(chat_id, text=f"❌ Không tìm thấy giá cho `{parts[1]}`.", reply_to_message_id=msg_id)
         elif cmd == '/gt':
             if len(parts) < 2:
-                send_telegram_message(chat_id, text="Cú pháp: `/gt <câu hỏi>`\nVí dụ: `/gt airdrop là gì?`", reply_to_message_id=msg_id)
+                send_telegram_message(chat_id, text="Cú pháp: `/gt <câu hỏi>`", reply_to_message_id=msg_id)
             else:
                 query = " ".join(parts[1:])
                 temp_msg_id = send_telegram_message(chat_id, text="🤔 Đang tìm hiểu, vui lòng chờ...", reply_to_message_id=msg_id)
                 if temp_msg_id:
                     explanation = get_crypto_explanation(query)
                     edit_telegram_message(chat_id, temp_msg_id, text=explanation)
+        elif cmd == '/calc':
+            result_text = calculate_value(parts)
+            send_telegram_message(chat_id, text=result_text, reply_to_message_id=msg_id)
         return jsonify(success=True)
     if len(parts) == 1 and is_crypto_address(parts[0]):
         send_telegram_message(chat_id, text=find_token_across_networks(parts[0]), reply_to_message_id=msg_id, disable_web_page_preview=True)
@@ -271,7 +287,7 @@ def cron_webhook():
                 time_until_due = task_time - now
                 if timedelta(seconds=1) < time_until_due <= timedelta(minutes=REMINDER_THRESHOLD_MINUTES):
                     minutes_left = int(time_until_due.total_seconds() / 60)
-                    reminder_text = f"‼️ *NHẮC NHỞ @all* ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
+                    reminder_text = f"‼️ *NHẮC NHỞ* ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
                     sent_message_id = send_telegram_message(chat_id, text=reminder_text)
                     if sent_message_id: pin_telegram_message(chat_id, sent_message_id)
                     task['reminded'] = True; tasks_changed = True; reminders_sent += 1
