@@ -7,6 +7,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 import pytz
 from redis import Redis
+import google.generativeai as genai # <<< THÊM MỚI
 
 # --- CẤU HÌNH ---
 AUTO_SEARCH_NETWORKS = ['bsc', 'eth', 'tron', 'polygon', 'arbitrum', 'base']
@@ -15,8 +16,10 @@ BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CRON_SECRET = os.getenv("CRON_SECRET")
 REMINDER_THRESHOLD_MINUTES = 30
 SYMBOL_TO_ID_MAP = {'btc': 'bitcoin', 'eth': 'ethereum', 'bnb': 'binancecoin', 'sol': 'solana'}
-# Biến môi trường mới cho OpenAI
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# Biến môi trường mới cho Google Gemini
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+if GOOGLE_API_KEY:
+    genai.configure(api_key=GOOGLE_API_KEY)
 
 # --- KẾT NỐI CƠ SỞ DỮ LIỆU ---
 try:
@@ -74,7 +77,7 @@ def list_tasks(chat_id) -> str:
     return "\n".join(result_lines)
 def delete_task(chat_id, task_index_str: str) -> str:
     if not kv: return "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
-    try: task_index = int(task_index_str) - 1; assert task_index >= 0
+    try: task_index = int(index_str) - 1; assert task_index >= 0
     except (ValueError, AssertionError): return "❌ Số thứ tự không hợp lệ."
     user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
     active_tasks = [t for t in user_tasks if datetime.fromisoformat(t['time_iso']) > datetime.now(TIMEZONE)]
@@ -94,36 +97,24 @@ def get_price_by_symbol(symbol: str) -> float | None:
     except requests.RequestException: return None
 
 def get_crypto_explanation(query: str) -> str:
-    """Lấy giải thích về thuật ngữ crypto từ OpenAI."""
-    if not OPENAI_API_KEY:
-        return "❌ Lỗi cấu hình: Thiếu OPENAI_API_KEY. Vui lòng liên hệ admin."
+    """Lấy giải thích về thuật ngữ crypto từ Google Gemini."""
+    if not GOOGLE_API_KEY:
+        return "❌ Lỗi cấu hình: Thiếu GOOGLE_API_KEY. Vui lòng liên hệ admin."
     
-    url = "https://api.openai.com/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    system_prompt = "Bạn là một trợ lý chuyên gia về tiền điện tử. Hãy trả lời các câu hỏi một cách ngắn gọn, súc tích, và dễ hiểu bằng tiếng Việt. Tập trung vào các khía cạnh quan trọng nhất."
-    payload = {
-        "model": "gpt-3.5-turbo",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": query}
-        ],
-        "max_tokens": 250,
-        "temperature": 0.5
-    }
     try:
-        res = requests.post(url, headers=headers, json=payload, timeout=25)
-        if res.status_code == 200:
-            return res.json()['choices'][0]['message']['content'].strip()
-        else:
-            error_details = res.json().get('error', {}).get('message', res.text)
-            print(f"OpenAI API Error: {error_details}")
-            return f"❌ Lỗi từ API giải thích: {error_details}"
-    except requests.RequestException as e:
-        print(f"Request exception to OpenAI: {e}")
-        return "❌ Lỗi mạng khi kết nối đến dịch vụ giải thích."
+        model = genai.GenerativeModel('gemini-1.0-pro-latest')
+        # Thêm context để câu trả lời được tập trung và chất lượng hơn
+        full_prompt = (
+            "Bạn là một trợ lý chuyên gia về tiền điện tử. Hãy trả lời câu hỏi sau một cách "
+            "ngắn gọn, súc tích, và dễ hiểu bằng tiếng Việt cho người mới bắt đầu. "
+            "Tập trung vào các khía cạnh quan trọng nhất.\n\n"
+            f"Câu hỏi: {query}"
+        )
+        response = model.generate_content(full_prompt)
+        return response.text
+    except Exception as e:
+        print(f"Google Gemini API Error: {e}")
+        return f"❌ Đã xảy ra lỗi khi kết nối với dịch vụ giải thích. Vui lòng thử lại sau."
 
 def is_evm_address(s: str) -> bool: return isinstance(s, str) and s.startswith('0x') and len(s) == 42
 def is_tron_address(s: str) -> bool: return isinstance(s, str) and s.startswith('T') and len(s) == 34
@@ -207,7 +198,9 @@ def webhook():
     text = data["message"]["text"].strip(); parts = text.split(); cmd = parts[0].lower()
     if cmd.startswith('/'):
         if cmd == "/start":
-            start_message = ("Gòi, cần gì fen?\n\n"
+            start_message = ("Chào mừng! Bot đã sẵn sàng.\n\n"
+                             "*Bot sẽ tự động PIN và THÔNG BÁO nhắc nhở cho cả nhóm.*\n"
+                             "*(Lưu ý: Bot cần có quyền Admin để Pin tin nhắn)*\n\n"
                              "**Chức năng Lịch hẹn:**\n"
                              "`/add DD/MM HH:mm - Tên`\n"
                              "`/list`, `/del <số>`, `/edit <số> ...`\n\n"
@@ -248,7 +241,7 @@ def webhook():
         if portfolio_result:
             refresh_btn = {'inline_keyboard': [[{'text': '🔄 Refresh', 'callback_data': 'refresh_portfolio'}]]}
             send_telegram_message(chat_id, text=portfolio_result, reply_to_message_id=msg_id, reply_markup=json.dumps(refresh_btn))
-        #else: send_telegram_message(chat_id, text="🤔 Cú pháp không hợp lệ. Gửi /start để xem hướng dẫn.", reply_to_message_id=msg_id)
+        else: send_telegram_message(chat_id, text="🤔 Cú pháp không hợp lệ. Gửi /start để xem hướng dẫn.", reply_to_message_id=msg_id)
     return jsonify(success=True)
 
 @app.route('/check_reminders', methods=['POST'])
@@ -267,7 +260,7 @@ def cron_webhook():
                 time_until_due = task_time - now
                 if timedelta(seconds=1) < time_until_due <= timedelta(minutes=REMINDER_THRESHOLD_MINUTES):
                     minutes_left = int(time_until_due.total_seconds() / 60)
-                    reminder_text = f"‼️ *NHẮC NHỞ * ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
+                    reminder_text = f"‼️ *NHẮC NHỞ @all* ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
                     sent_message_id = send_telegram_message(chat_id, text=reminder_text)
                     if sent_message_id: pin_telegram_message(chat_id, sent_message_id)
                     task['reminded'] = True; tasks_changed = True; reminders_sent += 1
