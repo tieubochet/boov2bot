@@ -1,8 +1,8 @@
 import os
 import json
 import requests
-import hashlib # Thư viện để xác thực webhook
-import hmac   # Thư viện để xác thực webhook
+import hashlib
+import hmac
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 import pytz
@@ -15,10 +15,9 @@ BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CRON_SECRET = os.getenv("CRON_SECRET")
 REMINDER_THRESHOLD_MINUTES = 30
 SYMBOL_TO_ID_MAP = {'btc': 'bitcoin', 'eth': 'ethereum', 'bnb': 'binancecoin', 'sol': 'solana'}
-# Biến môi trường mới cho Alchemy
+# Biến môi trường cho Alchemy
 ALCHEMY_API_KEY = os.getenv("ALCHEMY_API_KEY")
 ALCHEMY_AUTH_TOKEN = os.getenv("ALCHEMY_AUTH_TOKEN")
-ALCHEMY_WEBHOOK_ID = None # Sẽ được lấy tự động khi cần
 
 # --- KẾT NỐI CƠ SỞ DỮ LIỆU (VERCEL KV - REDIS) ---
 try:
@@ -50,10 +49,8 @@ def add_task(chat_id, task_string: str) -> str:
     return f"✅ Đã thêm lịch: *{name_part}* lúc *{task_dt.strftime('%H:%M %d/%m/%Y')}*."
 def edit_task(chat_id, index_str: str, new_task_string: str) -> str:
     if not kv: return "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
-    try:
-        task_index = int(index_str) - 1
-        if task_index < 0: raise ValueError
-    except ValueError: return "❌ Số thứ tự không hợp lệ."
+    try: task_index = int(index_str) - 1; assert task_index >= 0
+    except (ValueError, AssertionError): return "❌ Số thứ tự không hợp lệ."
     new_task_dt, new_name_part = parse_task_from_string(new_task_string)
     if not new_task_dt or not new_name_part: return "❌ Cú pháp công việc mới không hợp lệ. Dùng: `DD/MM HH:mm - Tên công việc`."
     user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
@@ -78,10 +75,8 @@ def list_tasks(chat_id) -> str:
     return "\n".join(result_lines)
 def delete_task(chat_id, task_index_str: str) -> str:
     if not kv: return "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
-    try:
-        task_index = int(task_index_str) - 1
-        if task_index < 0: raise ValueError
-    except ValueError: return "❌ Số thứ tự không hợp lệ."
+    try: task_index = int(task_index_str) - 1; assert task_index >= 0
+    except (ValueError, AssertionError): return "❌ Số thứ tự không hợp lệ."
     user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
     active_tasks = [t for t in user_tasks if datetime.fromisoformat(t['time_iso']) > datetime.now(TIMEZONE)]
     if task_index >= len(active_tasks): return "❌ Số thứ tự không hợp lệ."
@@ -91,31 +86,40 @@ def delete_task(chat_id, task_index_str: str) -> str:
     return f"✅ Đã xóa lịch hẹn: *{task_to_delete['name']}*"
 
 # --- LOGIC TRACKING VÍ ---
-def get_alchemy_webhook_id():
-    global ALCHEMY_WEBHOOK_ID
-    if ALCHEMY_WEBHOOK_ID: return ALCHEMY_WEBHOOK_ID
-    if not ALCHEMY_API_KEY or not ALCHEMY_AUTH_TOKEN: return None
+def get_alchemy_webhook_id() -> tuple[str | None, str | None]:
+    """Lấy Webhook ID và trả về (webhook_id, error_message)."""
+    if not ALCHEMY_API_KEY or not ALCHEMY_AUTH_TOKEN:
+        return None, "Lỗi cấu hình: Thiếu ALCHEMY_API_KEY hoặc ALCHEMY_AUTH_TOKEN."
     url = f"https://dashboard.alchemy.com/api/v2/{ALCHEMY_API_KEY}/webhooks"
     headers = {"X-Alchemy-Token": ALCHEMY_AUTH_TOKEN}
     try:
         res = requests.get(url, headers=headers, timeout=10)
-        if res.status_code == 200 and res.json().get('data'):
-            ALCHEMY_WEBHOOK_ID = res.json()['data'][0]['id']
-            return ALCHEMY_WEBHOOK_ID
-    except requests.RequestException as e: print(f"Error getting Alchemy webhook ID: {e}")
-    return None
+        if res.status_code != 200:
+            return None, f"Lỗi xác thực Alchemy (Code: {res.status_code}). Vui lòng kiểm tra lại API Key và Auth Token."
+        webhooks = res.json().get('data', [])
+        if not webhooks:
+            return None, "Lỗi: Không tìm thấy Webhook nào trên Alchemy. Vui lòng tạo một Webhook 'Address Activity' trong dashboard."
+        return webhooks[0].get('id'), None
+    except requests.RequestException as e:
+        print(f"Error getting Alchemy webhook ID: {e}")
+        return None, "Lỗi mạng khi kết nối đến Alchemy."
 
-def update_alchemy_addresses(addresses_to_add=None, addresses_to_remove=None):
-    webhook_id = get_alchemy_webhook_id()
-    if not webhook_id: return False
+def update_alchemy_addresses(addresses_to_add=None, addresses_to_remove=None) -> tuple[bool, str | None]:
+    """Cập nhật danh sách địa chỉ và trả về (success, error_message)."""
+    webhook_id, error = get_alchemy_webhook_id()
+    if error: return False, error
+    
     url = f"https://dashboard.alchemy.com/api/v2/{ALCHEMY_API_KEY}/webhooks/{webhook_id}/addresses"
     headers = {"X-Alchemy-Token": ALCHEMY_AUTH_TOKEN, "Content-Type": "application/json"}
     payload = {"addresses_to_add": addresses_to_add or [], "addresses_to_remove": addresses_to_remove or []}
     try:
         res = requests.patch(url, headers=headers, json=payload, timeout=10)
-        return res.status_code == 200
-    except requests.RequestException as e: print(f"Error updating Alchemy addresses: {e}")
-    return False
+        if res.status_code == 200:
+            return True, None
+        return False, f"Lỗi khi cập nhật ví trên Alchemy (Code: {res.status_code})."
+    except requests.RequestException as e:
+        print(f"Error updating Alchemy addresses: {e}")
+        return False, "Lỗi mạng khi cập nhật ví trên Alchemy."
 
 def track_wallet(chat_id, address: str) -> str:
     if not kv: return "Lỗi: Chức năng theo dõi không khả dụng do không kết nối được DB."
@@ -127,8 +131,9 @@ def track_wallet(chat_id, address: str) -> str:
     
     subscribers = set(json.loads(kv.get(f"subscribers:{address_lower}") or '[]'))
     if not subscribers: # Ví này chưa được ai theo dõi, cần thêm vào Alchemy
-        if not update_alchemy_addresses(addresses_to_add=[address_lower]):
-            return "❌ Lỗi khi thêm ví vào dịch vụ theo dõi. Vui lòng thử lại sau."
+        success, error = update_alchemy_addresses(addresses_to_add=[address_lower])
+        if not success:
+            return f"❌ {error}" if error else "❌ Lỗi không xác định khi thêm ví vào dịch vụ theo dõi."
             
     wallets.add(address_lower)
     subscribers.add(str(chat_id))
@@ -152,7 +157,9 @@ def untrack_wallet(chat_id, address: str) -> str:
     kv.set(f"subscribers:{address_lower}", json.dumps(list(subscribers)))
     
     if not subscribers: # Không còn ai theo dõi ví này, xóa khỏi Alchemy
-        update_alchemy_addresses(addresses_to_remove=[address_lower])
+        success, error = update_alchemy_addresses(addresses_to_remove=[address_lower])
+        if not success:
+             return f"⚠️ Đã hủy theo dõi, nhưng có lỗi khi xóa ví khỏi dịch vụ: {error}"
         
     return f"✅ Đã hủy theo dõi ví:\n`{address}`"
 
@@ -318,7 +325,7 @@ def cron_webhook():
                 time_until_due = task_time - now
                 if timedelta(seconds=1) < time_until_due <= timedelta(minutes=REMINDER_THRESHOLD_MINUTES):
                     minutes_left = int(time_until_due.total_seconds() / 60)
-                    reminder_text = f"‼️ *NHẮC NHỞ * ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
+                    reminder_text = f"‼️ *NHẮC NHỞ @all* ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
                     sent_message_id = send_telegram_message(chat_id, text=reminder_text)
                     if sent_message_id: pin_telegram_message(chat_id, sent_message_id)
                     task['reminded'] = True; tasks_changed = True; reminders_sent += 1
