@@ -18,17 +18,22 @@ SYMBOL_TO_ID_MAP = {
     'ada': 'cardano', 'avax': 'avalanche-2', 'link': 'chainlink', 'matic': 'matic-network',
     'dom': 'dominium-2'
 }
+### <<< THÊM MỚI: Header để "giả dạng" trình duyệt ###
+API_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+}
 
 # --- KẾT NỐI CƠ SỞ DỮ LIỆU (VERCEL KV - REDIS) ---
 try:
     kv_url = os.getenv("teeboov2_REDIS_URL")
-    if not kv_url: raise ValueError("teeboov2_REDIS_URL is not set.")
+    if not kv_url:
+        raise ValueError("teeboov2_REDIS_URL is not set. Please connect a Vercel KV store.")
     kv = Redis.from_url(kv_url, decode_responses=True)
 except Exception as e:
     print(f"FATAL: Could not connect to Redis. Task features will be disabled. Error: {e}")
     kv = None
 
-# --- LOGIC QUẢN LÝ CÔNG VIỆC ---
+# --- LOGIC QUẢN LÝ CÔNG VIỆC (Không thay đổi) ---
 def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | None]:
     try:
         time_part, name_part = task_string.split(' - ', 1)
@@ -96,28 +101,30 @@ def get_price_by_symbol(symbol: str) -> float | None:
     coin_id = get_coingecko_id(symbol)
     url = "https://api.coingecko.com/api/v3/simple/price"; params = {'ids': coin_id, 'vs_currencies': 'usd'}
     try:
-        res = requests.get(url, params=params, timeout=5)
+        ### <<< THAY ĐỔI: Thêm headers vào request ###
+        res = requests.get(url, params=params, timeout=5, headers=API_HEADERS)
         return res.json().get(coin_id, {}).get('usd') if res.status_code == 200 else None
     except requests.RequestException: return None
-
 def get_chart_data(symbol: str, timeframe: str) -> tuple[list, float, float] | None:
-    """Lấy dữ liệu lịch sử giá, giá hiện tại và % thay đổi từ CoinGecko."""
     coin_id = get_coingecko_id(symbol)
     timeframe_map = {'M15': {'days': 1, 'interval': 'hourly'}, 'M30': {'days': 1, 'interval': 'hourly'}, 'H1': {'days': 1, 'interval': 'hourly'}, 'H4': {'days': 7, 'interval': 'hourly'}, 'D1': {'days': 90, 'interval': 'daily'}, 'W1': {'days': 365, 'interval': 'daily'}}
     api_params = timeframe_map.get(timeframe.upper(), {'days': 7, 'interval': 'daily'})
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"; params = {'vs_currency': 'usd', 'days': api_params['days'], 'interval': api_params['interval']}
     try:
-        res = requests.get(url, params=params, timeout=10)
-        if res.status_code != 200: return None
+        ### <<< THAY ĐỔI: Thêm headers vào request và log lỗi chi tiết hơn ###
+        res = requests.get(url, params=params, timeout=10, headers=API_HEADERS)
+        if res.status_code != 200:
+            print(f"CoinGecko API Error for /market_chart: Status {res.status_code}, Response: {res.text}")
+            return None
         data = res.json().get('prices', [])
         if not data or len(data) < 2: return None
         current_price = data[-1][1]; start_price = data[0][1]
         price_change_pct = ((current_price - start_price) / start_price) * 100 if start_price != 0 else 0
         return data, current_price, price_change_pct
-    except requests.RequestException: return None
-
+    except requests.RequestException as e:
+        print(f"Request exception for /market_chart: {e}")
+        return None
 def create_chart_url(symbol: str, timeframe: str, chart_data: list, price_change_pct: float) -> str:
-    """Tạo URL ảnh biểu đồ từ QuickChart.io."""
     timestamps = [item[0] for item in chart_data]; prices = [item[1] for item in chart_data]
     line_color = '#28a745' if price_change_pct >= 0 else '#dc3545'
     chart_config = {"type": "line", "data": {"labels": [datetime.fromtimestamp(ts/1000).strftime('%d/%m %H:%M') for ts in timestamps], "datasets": [{"label": "Price (USD)", "data": prices, "fill": False, "borderColor": line_color, "borderWidth": 2, "pointRadius": 0}]}, "options": {"title": {"display": True, "text": f"{symbol.upper()}/USD - {timeframe.upper()} Chart"}, "legend": {"display": False}, "scales": {"xAxes": [{"display": False}], "yAxes": [{"gridLines": {"color": "rgba(255, 255, 255, 0.1)"}}]}}}
@@ -127,14 +134,11 @@ def create_chart_url(symbol: str, timeframe: str, chart_data: list, price_change
         if res.status_code == 200: return res.json().get('url')
     except requests.RequestException: return None
     return None
-
 def send_chart_photo(chat_id, photo_url: str, caption: str, reply_to_message_id):
-    """Gửi ảnh bằng URL tới Telegram."""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
     payload = {'chat_id': chat_id, 'photo': photo_url, 'caption': caption, 'parse_mode': 'Markdown', 'reply_to_message_id': reply_to_message_id}
     try: requests.post(url, json=payload, timeout=15)
     except requests.RequestException as e: print(f"Error sending photo: {e}")
-
 def is_evm_address(s: str) -> bool: return isinstance(s, str) and s.startswith('0x') and len(s) == 42
 def is_tron_address(s: str) -> bool: return isinstance(s, str) and s.startswith('T') and len(s) == 34
 def is_crypto_address(s: str) -> bool: return is_evm_address(s) or is_tron_address(s)
@@ -253,7 +257,7 @@ def webhook():
                 if temp_msg_id:
                     chart_info = get_chart_data(symbol, timeframe)
                     if not chart_info:
-                        edit_telegram_message(chat_id, temp_msg_id, text=f"❌ Không thể lấy dữ liệu biểu đồ cho `{symbol}`.")
+                        edit_telegram_message(chat_id, temp_msg_id, text=f"❌ Không thể lấy dữ liệu biểu đồ cho `{symbol}`. (Thử lại sau hoặc kiểm tra ký hiệu)")
                         return jsonify(success=True)
                     chart_data, current_price, price_change_pct = chart_info
                     chart_url = create_chart_url(symbol, timeframe, chart_data, price_change_pct)
@@ -272,8 +276,8 @@ def webhook():
         if portfolio_result:
             refresh_btn = {'inline_keyboard': [[{'text': '🔄 Refresh', 'callback_data': 'refresh_portfolio'}]]}
             send_telegram_message(chat_id, text=portfolio_result, reply_to_message_id=msg_id, reply_markup=json.dumps(refresh_btn))
-        ##else:
-            ##send_telegram_message(chat_id, text="🤔 Cú pháp không hợp lệ. Gửi /start để xem hướng dẫn.", reply_to_message_id=msg_id)
+        #else:
+            #send_telegram_message(chat_id, text="🤔 Cú pháp không hợp lệ. Gửi /start để xem hướng dẫn.", reply_to_message_id=msg_id)
     return jsonify(success=True)
 
 @app.route('/check_reminders', methods=['POST'])
