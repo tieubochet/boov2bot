@@ -7,7 +7,6 @@ import pytz
 from redis import Redis
 
 # --- CẤU HÌNH ---
-### <<< THAY ĐỔI: Thêm 'tron' vào danh sách quét ###
 AUTO_SEARCH_NETWORKS = ['bsc', 'eth', 'tron', 'polygon', 'arbitrum', 'base']
 TIMEZONE = pytz.timezone('Asia/Ho_Chi_Minh')
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -15,20 +14,21 @@ CRON_SECRET = os.getenv("CRON_SECRET")
 REMINDER_THRESHOLD_MINUTES = 30
 SYMBOL_TO_ID_MAP = {
     'btc': 'bitcoin', 'eth': 'ethereum', 'bnb': 'binancecoin', 'sol': 'solana',
-    'xrp': 'ripple', 'doge': 'dogecoin', 'shib': 'shiba-inu'
+    'xrp': 'ripple', 'doge': 'dogecoin', 'shib': 'shiba-inu', 'dot': 'polkadot',
+    'ada': 'cardano', 'avax': 'avalanche-2', 'link': 'chainlink', 'matic': 'matic-network',
+    'dom': 'dominium-2'
 }
 
 # --- KẾT NỐI CƠ SỞ DỮ LIỆU (VERCEL KV - REDIS) ---
 try:
     kv_url = os.getenv("teeboov2_REDIS_URL")
-    if not kv_url:
-        raise ValueError("teeboov2_REDIS_URL is not set. Please connect a Vercel KV store.")
+    if not kv_url: raise ValueError("teeboov2_REDIS_URL is not set.")
     kv = Redis.from_url(kv_url, decode_responses=True)
 except Exception as e:
     print(f"FATAL: Could not connect to Redis. Task features will be disabled. Error: {e}")
     kv = None
 
-# --- LOGIC QUẢN LÝ CÔNG VIỆC (Không thay đổi) ---
+# --- LOGIC QUẢN LÝ CÔNG VIỆC ---
 def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | None]:
     try:
         time_part, name_part = task_string.split(' - ', 1)
@@ -91,34 +91,62 @@ def delete_task(chat_id, task_index_str: str) -> str:
     return f"✅ Đã xóa lịch hẹn: *{task_to_delete['name']}*"
 
 # --- LOGIC CRYPTO & TIỆN ÍCH BOT ---
+def get_coingecko_id(symbol: str) -> str: return SYMBOL_TO_ID_MAP.get(symbol.lower(), symbol.lower())
 def get_price_by_symbol(symbol: str) -> float | None:
-    coin_id = SYMBOL_TO_ID_MAP.get(symbol.lower(), symbol.lower())
+    coin_id = get_coingecko_id(symbol)
     url = "https://api.coingecko.com/api/v3/simple/price"; params = {'ids': coin_id, 'vs_currencies': 'usd'}
     try:
-        response = requests.get(url, params=params, timeout=5)
-        if response.status_code != 200: return None
-        return response.json().get(coin_id, {}).get('usd')
+        res = requests.get(url, params=params, timeout=5)
+        return res.json().get(coin_id, {}).get('usd') if res.status_code == 200 else None
     except requests.RequestException: return None
 
-### <<< THÊM MỚI: Các hàm nhận diện địa chỉ ###
+def get_chart_data(symbol: str, timeframe: str) -> tuple[list, float, float] | None:
+    """Lấy dữ liệu lịch sử giá, giá hiện tại và % thay đổi từ CoinGecko."""
+    coin_id = get_coingecko_id(symbol)
+    timeframe_map = {'M15': {'days': 1, 'interval': 'hourly'}, 'M30': {'days': 1, 'interval': 'hourly'}, 'H1': {'days': 1, 'interval': 'hourly'}, 'H4': {'days': 7, 'interval': 'hourly'}, 'D1': {'days': 90, 'interval': 'daily'}, 'W1': {'days': 365, 'interval': 'daily'}}
+    api_params = timeframe_map.get(timeframe.upper(), {'days': 7, 'interval': 'daily'})
+    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"; params = {'vs_currency': 'usd', 'days': api_params['days'], 'interval': api_params['interval']}
+    try:
+        res = requests.get(url, params=params, timeout=10)
+        if res.status_code != 200: return None
+        data = res.json().get('prices', [])
+        if not data or len(data) < 2: return None
+        current_price = data[-1][1]; start_price = data[0][1]
+        price_change_pct = ((current_price - start_price) / start_price) * 100 if start_price != 0 else 0
+        return data, current_price, price_change_pct
+    except requests.RequestException: return None
+
+def create_chart_url(symbol: str, timeframe: str, chart_data: list, price_change_pct: float) -> str:
+    """Tạo URL ảnh biểu đồ từ QuickChart.io."""
+    timestamps = [item[0] for item in chart_data]; prices = [item[1] for item in chart_data]
+    line_color = '#28a745' if price_change_pct >= 0 else '#dc3545'
+    chart_config = {"type": "line", "data": {"labels": [datetime.fromtimestamp(ts/1000).strftime('%d/%m %H:%M') for ts in timestamps], "datasets": [{"label": "Price (USD)", "data": prices, "fill": False, "borderColor": line_color, "borderWidth": 2, "pointRadius": 0}]}, "options": {"title": {"display": True, "text": f"{symbol.upper()}/USD - {timeframe.upper()} Chart"}, "legend": {"display": False}, "scales": {"xAxes": [{"display": False}], "yAxes": [{"gridLines": {"color": "rgba(255, 255, 255, 0.1)"}}]}}}
+    qc_url = "https://quickchart.io/chart/create"; payload = {"chart": json.dumps(chart_config), "backgroundColor": "#20232A", "width": 600, "height": 400}
+    try:
+        res = requests.post(qc_url, json=payload, timeout=10)
+        if res.status_code == 200: return res.json().get('url')
+    except requests.RequestException: return None
+    return None
+
+def send_chart_photo(chat_id, photo_url: str, caption: str, reply_to_message_id):
+    """Gửi ảnh bằng URL tới Telegram."""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+    payload = {'chat_id': chat_id, 'photo': photo_url, 'caption': caption, 'parse_mode': 'Markdown', 'reply_to_message_id': reply_to_message_id}
+    try: requests.post(url, json=payload, timeout=15)
+    except requests.RequestException as e: print(f"Error sending photo: {e}")
+
 def is_evm_address(s: str) -> bool: return isinstance(s, str) and s.startswith('0x') and len(s) == 42
 def is_tron_address(s: str) -> bool: return isinstance(s, str) and s.startswith('T') and len(s) == 34
-def is_crypto_address(s: str) -> bool:
-    """Kiểm tra xem một chuỗi có phải là địa chỉ EVM hoặc Tron không."""
-    return is_evm_address(s) or is_tron_address(s)
-
+def is_crypto_address(s: str) -> bool: return is_evm_address(s) or is_tron_address(s)
 def send_telegram_message(chat_id, text, **kwargs) -> int | None:
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {'chat_id': chat_id, 'text': text, 'parse_mode': 'Markdown', **kwargs}
     try:
         response = requests.post(url, json=payload, timeout=10)
-        if response.status_code == 200 and response.json().get('ok'):
-            return response.json().get('result', {}).get('message_id')
-        print(f"Error sending message, response: {response.text}")
-        return None
+        if response.status_code == 200 and response.json().get('ok'): return response.json().get('result', {}).get('message_id')
+        print(f"Error sending message, response: {response.text}"); return None
     except requests.RequestException as e:
-        print(f"Error sending message: {e}")
-        return None
+        print(f"Error sending message: {e}"); return None
 def pin_telegram_message(chat_id, message_id):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/pinChatMessage"
     payload = {'chat_id': chat_id, 'message_id': message_id, 'disable_notification': False}
@@ -149,7 +177,6 @@ def find_token_across_networks(address: str) -> str:
                         f"🔗 [Xem trên GeckoTerminal](https://www.geckoterminal.com/{network}/tokens/{address})\n\n`{address}`")
         except requests.RequestException: continue
     return f"❌ Không tìm thấy token với địa chỉ `{address[:10]}...`."
-
 def process_portfolio_text(message_text: str) -> str | None:
     lines = message_text.strip().split('\n'); total_value, result_lines, valid_lines_count = 0.0, [], 0
     for line in lines:
@@ -157,13 +184,9 @@ def process_portfolio_text(message_text: str) -> str | None:
         if len(parts) != 3: continue
         try: amount = float(parts[0])
         except ValueError: continue
-        
         address, network = parts[1], parts[2]
-        ### <<< THAY ĐỔI: Thêm kiểm tra định dạng địa chỉ trong portfolio ###
         if not is_crypto_address(address):
-            result_lines.append(f"❌ Địa chỉ `{address[:10]}...` không hợp lệ.")
-            continue
-            
+            result_lines.append(f"❌ Địa chỉ `{address[:10]}...` không hợp lệ."); continue
         valid_lines_count += 1
         url = f"https://api.geckoterminal.com/api/v2/networks/{network.lower()}/tokens/{address}"
         try:
@@ -179,7 +202,6 @@ def process_portfolio_text(message_text: str) -> str | None:
 
 # --- WEB SERVER (FLASK) ---
 app = Flask(__name__)
-
 @app.route('/', methods=['POST'])
 def webhook():
     if not BOT_TOKEN: return "Server configuration error", 500
@@ -196,17 +218,17 @@ def webhook():
 
     if cmd.startswith('/'):
         if cmd == "/start":
-            ### <<< THAY ĐỔI: Cập nhật tin nhắn hướng dẫn
-            start_message = (
-                "Gòi, cần gì fen?\n\n"
-                "**Chức năng Lịch hẹn:**\n"
-                "`/add DD/MM HH:mm - Tên công việc`\n"
-                "`/list`, `/del <số>`, `/edit <số> ...`\n\n"
-                "**Chức năng Crypto:**\n"
-                "`/gia <ký hiệu>`\n\n"
-                "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract.\n"
-                "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`"
-            )
+            start_message = ("Chào mừng! Bot đã sẵn sàng.\n\n"
+                             "*Bot sẽ tự động PIN và THÔNG BÁO nhắc nhở cho cả nhóm trước 30 phút.*\n"
+                             "*(Lưu ý: Bot cần có quyền Admin để Pin tin nhắn)*\n\n"
+                             "**Chức năng Lịch hẹn:**\n"
+                             "`/add DD/MM HH:mm - Tên`\n"
+                             "`/list`, `/del <số>`, `/edit <số> ...`\n\n"
+                             "**Chức năng Crypto:**\n"
+                             "`/gia <ký hiệu>`\n"
+                             "`/chart <ký hiệu> [khung]` (vd: /chart btc H4)\n\n"
+                             "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract (hỗ trợ EVM & Tron).\n"
+                             "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`")
             send_telegram_message(chat_id, text=start_message)
         elif cmd == '/add': send_telegram_message(chat_id, text=add_task(chat_id, " ".join(parts[1:])), reply_to_message_id=msg_id)
         elif cmd == '/list': send_telegram_message(chat_id, text=list_tasks(chat_id), reply_to_message_id=msg_id)
@@ -220,11 +242,29 @@ def webhook():
             if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/gia <ký hiệu>`", reply_to_message_id=msg_id)
             else:
                 price = get_price_by_symbol(parts[1])
-                if price is not None: send_telegram_message(chat_id, text=f"Giá của *{parts[1].upper()}* là: `${price:,.4f}`", reply_to_message_id=msg_id)
-                else: send_telegram_message(chat_id, text=f"❌ Không tìm thấy giá cho ký hiệu `{parts[1]}`.", reply_to_message_id=msg_id)
+                if price: send_telegram_message(chat_id, text=f"Giá của *{parts[1].upper()}* là: `${price:,.4f}`", reply_to_message_id=msg_id)
+                else: send_telegram_message(chat_id, text=f"❌ Không tìm thấy giá cho `{parts[1]}`.", reply_to_message_id=msg_id)
+        elif cmd == '/chart':
+            if len(parts) < 2:
+                send_telegram_message(chat_id, text="Cú pháp: `/chart <ký hiệu> [khung]`\nVí dụ: `/chart btc D1`", reply_to_message_id=msg_id)
+            else:
+                symbol = parts[1]; timeframe = parts[2] if len(parts) > 2 else 'D1'
+                temp_msg_id = send_telegram_message(chat_id, text="⏳ Đang tạo biểu đồ, vui lòng chờ...", reply_to_message_id=msg_id)
+                if temp_msg_id:
+                    chart_info = get_chart_data(symbol, timeframe)
+                    if not chart_info:
+                        edit_telegram_message(chat_id, temp_msg_id, text=f"❌ Không thể lấy dữ liệu biểu đồ cho `{symbol}`.")
+                        return jsonify(success=True)
+                    chart_data, current_price, price_change_pct = chart_info
+                    chart_url = create_chart_url(symbol, timeframe, chart_data, price_change_pct)
+                    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage", json={'chat_id': chat_id, 'message_id': temp_msg_id})
+                    if not chart_url:
+                        send_telegram_message(chat_id, text=f"❌ Lỗi khi tạo ảnh biểu đồ.", reply_to_message_id=msg_id)
+                    else:
+                        caption = f"*{symbol.upper()}/USD* - Khung: *{timeframe.upper()}*\nGiá: *${current_price:,.4f}*\nThay đổi: *{'📈' if price_change_pct >= 0 else '📉'} {price_change_pct:+.2f}%*"
+                        send_chart_photo(chat_id, chart_url, caption, msg_id)
         return jsonify(success=True)
 
-    ### <<< THAY ĐỔI: Sử dụng hàm is_crypto_address ###
     if len(parts) == 1 and is_crypto_address(parts[0]):
         send_telegram_message(chat_id, text=find_token_across_networks(parts[0]), reply_to_message_id=msg_id, disable_web_page_preview=True)
     else:
@@ -232,7 +272,8 @@ def webhook():
         if portfolio_result:
             refresh_btn = {'inline_keyboard': [[{'text': '🔄 Refresh', 'callback_data': 'refresh_portfolio'}]]}
             send_telegram_message(chat_id, text=portfolio_result, reply_to_message_id=msg_id, reply_markup=json.dumps(refresh_btn))
-        #else: send_telegram_message(chat_id, text="🤔 Cú pháp không hợp lệ. Gửi /start để xem hướng dẫn.", reply_to_message_id=msg_id)
+        ##else:
+            ##send_telegram_message(chat_id, text="🤔 Cú pháp không hợp lệ. Gửi /start để xem hướng dẫn.", reply_to_message_id=msg_id)
     return jsonify(success=True)
 
 @app.route('/check_reminders', methods=['POST'])
