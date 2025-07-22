@@ -27,7 +27,7 @@ try:
 except Exception as e:
     print(f"FATAL: Could not connect to Redis. Error: {e}"); kv = None
 
-# --- LOGIC QUẢN LÝ CÔNG VIỆC ---
+# --- LOGIC QUẢN LÝ CÔNG VIỆC (Không thay đổi) ---
 def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | None]:
     try:
         time_part, name_part = task_string.split(' - ', 1)
@@ -75,7 +75,7 @@ def list_tasks(chat_id) -> str:
     return "\n".join(result_lines)
 def delete_task(chat_id, task_index_str: str) -> str:
     if not kv: return "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
-    try: task_index = int(task_index_str) - 1; assert task_index >= 0
+    try: task_index = int(index_str) - 1; assert task_index >= 0
     except (ValueError, AssertionError): return "❌ Số thứ tự không hợp lệ."
     user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
     active_tasks = [t for t in user_tasks if datetime.fromisoformat(t['time_iso']) > datetime.now(TIMEZONE)]
@@ -85,25 +85,16 @@ def delete_task(chat_id, task_index_str: str) -> str:
     kv.set(f"tasks:{chat_id}", json.dumps(updated_tasks))
     return f"✅ Đã xóa lịch hẹn: *{task_to_delete['name']}*"
 
-# --- LOGIC TRACKING VÍ (Đã sửa lỗi API) ---
+# --- LOGIC TRACKING VÍ (Cập nhật với API mới) ---
 def update_alchemy_addresses(addresses_to_add=None, addresses_to_remove=None) -> tuple[bool, str | None]:
-    """Cập nhật danh sách địa chỉ theo dõi trên Alchemy bằng API Notify mới."""
     if not ALCHEMY_API_KEY or not ALCHEMY_AUTH_TOKEN:
         return False, "Lỗi cấu hình: Thiếu ALCHEMY_API_KEY hoặc ALCHEMY_AUTH_TOKEN."
-
     url = f"https://api.alchemy.com/v2/{ALCHEMY_API_KEY}"
     headers = {"X-Alchemy-Token": ALCHEMY_AUTH_TOKEN, "Content-Type": "application/json"}
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "alchemy_updateWebhookAddresses",
-        "params": [
-            addresses_to_add or [],
-            addresses_to_remove or []
-        ]
-    }
+    payload = {"jsonrpc": "2.0", "id": 1, "method": "alchemy_updateWebhookAddresses", "params": [addresses_to_add or [], addresses_to_remove or []]}
     try:
-        res = requests.post(url, headers=headers, json=payload, timeout=10)
+        ### <<< THAY ĐỔI: Tăng timeout và cải thiện log lỗi ###
+        res = requests.post(url, headers=headers, json=payload, timeout=20)
         if res.status_code == 200 and 'result' in res.json():
             return True, None
         else:
@@ -111,7 +102,7 @@ def update_alchemy_addresses(addresses_to_add=None, addresses_to_remove=None) ->
             print(f"Alchemy API Error: {error_details}")
             return False, f"Lỗi từ Alchemy: {error_details}"
     except requests.RequestException as e:
-        print(f"Error updating Alchemy addresses: {e}")
+        print(f"Network request to Alchemy failed: {e}")
         return False, "Lỗi mạng khi cập nhật ví trên Alchemy."
 
 def track_wallet(chat_id, address: str) -> str:
@@ -123,7 +114,7 @@ def track_wallet(chat_id, address: str) -> str:
     if address_lower in wallets: return f"Ví `{address[:6]}...` đã được theo dõi."
     
     subscribers = set(json.loads(kv.get(f"subscribers:{address_lower}") or '[]'))
-    if not subscribers: # Ví này chưa được ai theo dõi, cần thêm vào Alchemy
+    if not subscribers:
         success, error = update_alchemy_addresses(addresses_to_add=[address_lower])
         if not success:
             return f"❌ {error}" if error else "❌ Lỗi không xác định khi thêm ví vào dịch vụ theo dõi."
@@ -149,7 +140,7 @@ def untrack_wallet(chat_id, address: str) -> str:
     subscribers.discard(str(chat_id))
     kv.set(f"subscribers:{address_lower}", json.dumps(list(subscribers)))
     
-    if not subscribers: # Không còn ai theo dõi ví này, xóa khỏi Alchemy
+    if not subscribers:
         success, error = update_alchemy_addresses(addresses_to_remove=[address_lower])
         if not success:
              return f"⚠️ Đã hủy theo dõi, nhưng có lỗi khi xóa ví khỏi dịch vụ: {error}"
@@ -169,7 +160,7 @@ def get_price_by_symbol(symbol: str) -> float | None:
     coin_id = SYMBOL_TO_ID_MAP.get(symbol.lower(), symbol.lower())
     url = "https://api.coingecko.com/api/v3/simple/price"; params = {'ids': coin_id, 'vs_currencies': 'usd'}
     try:
-        res = requests.get(url, params=params, timeout=5)
+        res = requests.get(url, params=params, timeout=10) # Tăng timeout một chút
         return res.json().get(coin_id, {}).get('usd') if res.status_code == 200 else None
     except requests.RequestException: return None
 def is_evm_address(s: str) -> bool: return isinstance(s, str) and s.startswith('0x') and len(s) == 42
@@ -204,7 +195,7 @@ def find_token_across_networks(address: str) -> str:
     for network in AUTO_SEARCH_NETWORKS:
         url = f"https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{address}?include=top_pools"
         try:
-            res = requests.get(url, headers={"accept": "application/json"}, timeout=5)
+            res = requests.get(url, headers={"accept": "application/json"}, timeout=10) # Tăng timeout
             if res.status_code == 200:
                 data = res.json(); token_attr = data.get('data', {}).get('attributes', {})
                 price = float(token_attr.get('price_usd', 0)); change = float(token_attr.get('price_change_percentage', {}).get('h24', 0))
@@ -227,7 +218,7 @@ def process_portfolio_text(message_text: str) -> str | None:
         valid_lines_count += 1
         url = f"https://api.geckoterminal.com/api/v2/networks/{network.lower()}/tokens/{address}"
         try:
-            res = requests.get(url, headers={"accept": "application/json"}, timeout=5)
+            res = requests.get(url, headers={"accept": "application/json"}, timeout=10) # Tăng timeout
             if res.status_code == 200:
                 attr = res.json().get('data', {}).get('attributes', {}); price = float(attr.get('price_usd', 0)); symbol = attr.get('symbol', 'N/A')
                 value = amount * price; total_value += value
