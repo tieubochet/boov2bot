@@ -85,38 +85,31 @@ def delete_task(chat_id, task_index_str: str) -> str:
     kv.set(f"tasks:{chat_id}", json.dumps(updated_tasks))
     return f"✅ Đã xóa lịch hẹn: *{task_to_delete['name']}*"
 
-# --- LOGIC TRACKING VÍ ---
-def get_alchemy_webhook_id() -> tuple[str | None, str | None]:
-    """Lấy Webhook ID và trả về (webhook_id, error_message)."""
-    if not ALCHEMY_API_KEY or not ALCHEMY_AUTH_TOKEN:
-        return None, "Lỗi cấu hình: Thiếu ALCHEMY_API_KEY hoặc ALCHEMY_AUTH_TOKEN."
-    url = f"https://dashboard.alchemy.com/api/v2/{ALCHEMY_API_KEY}/webhooks"
-    headers = {"X-Alchemy-Token": ALCHEMY_AUTH_TOKEN}
-    try:
-        res = requests.get(url, headers=headers, timeout=10)
-        if res.status_code != 200:
-            return None, f"Lỗi xác thực Alchemy (Code: {res.status_code}). Vui lòng kiểm tra lại API Key và Auth Token."
-        webhooks = res.json().get('data', [])
-        if not webhooks:
-            return None, "Lỗi: Không tìm thấy Webhook nào trên Alchemy. Vui lòng tạo một Webhook 'Address Activity' trong dashboard."
-        return webhooks[0].get('id'), None
-    except requests.RequestException as e:
-        print(f"Error getting Alchemy webhook ID: {e}")
-        return None, "Lỗi mạng khi kết nối đến Alchemy."
-
+# --- LOGIC TRACKING VÍ (Đã sửa lỗi API) ---
 def update_alchemy_addresses(addresses_to_add=None, addresses_to_remove=None) -> tuple[bool, str | None]:
-    """Cập nhật danh sách địa chỉ và trả về (success, error_message)."""
-    webhook_id, error = get_alchemy_webhook_id()
-    if error: return False, error
-    
-    url = f"https://dashboard.alchemy.com/api/v2/{ALCHEMY_API_KEY}/webhooks/{webhook_id}/addresses"
+    """Cập nhật danh sách địa chỉ theo dõi trên Alchemy bằng API Notify mới."""
+    if not ALCHEMY_API_KEY or not ALCHEMY_AUTH_TOKEN:
+        return False, "Lỗi cấu hình: Thiếu ALCHEMY_API_KEY hoặc ALCHEMY_AUTH_TOKEN."
+
+    url = f"https://api.alchemy.com/v2/{ALCHEMY_API_KEY}"
     headers = {"X-Alchemy-Token": ALCHEMY_AUTH_TOKEN, "Content-Type": "application/json"}
-    payload = {"addresses_to_add": addresses_to_add or [], "addresses_to_remove": addresses_to_remove or []}
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "alchemy_updateWebhookAddresses",
+        "params": [
+            addresses_to_add or [],
+            addresses_to_remove or []
+        ]
+    }
     try:
-        res = requests.patch(url, headers=headers, json=payload, timeout=10)
-        if res.status_code == 200:
+        res = requests.post(url, headers=headers, json=payload, timeout=10)
+        if res.status_code == 200 and 'result' in res.json():
             return True, None
-        return False, f"Lỗi khi cập nhật ví trên Alchemy (Code: {res.status_code})."
+        else:
+            error_details = res.json().get('error', {}).get('message', res.text)
+            print(f"Alchemy API Error: {error_details}")
+            return False, f"Lỗi từ Alchemy: {error_details}"
     except requests.RequestException as e:
         print(f"Error updating Alchemy addresses: {e}")
         return False, "Lỗi mạng khi cập nhật ví trên Alchemy."
@@ -306,7 +299,7 @@ def webhook():
         if portfolio_result:
             refresh_btn = {'inline_keyboard': [[{'text': '🔄 Refresh', 'callback_data': 'refresh_portfolio'}]]}
             send_telegram_message(chat_id, text=portfolio_result, reply_to_message_id=msg_id, reply_markup=json.dumps(refresh_btn))
-        #else: send_telegram_message(chat_id, text="🤔 Cú pháp không hợp lệ. Gửi /start để xem hướng dẫn.", reply_to_message_id=msg_id)
+        else: send_telegram_message(chat_id, text="🤔 Cú pháp không hợp lệ. Gửi /start để xem hướng dẫn.", reply_to_message_id=msg_id)
     return jsonify(success=True)
 
 @app.route('/check_reminders', methods=['POST'])
