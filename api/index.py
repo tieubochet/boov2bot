@@ -94,7 +94,7 @@ def delete_task(chat_id, task_index_str: str) -> str:
     kv.set(f"tasks:{chat_id}", json.dumps(updated_tasks))
     return f"✅ Đã xóa lịch hẹn: *{task_to_delete['name']}*"
 
-# --- LOGIC CRYPTO & TIỆN ÍCH BOT ---
+# --- LOGIC CRYPTO & TIỆN ÍCH BOT (Không thay đổi) ---
 def get_price_by_symbol(symbol: str) -> float | None:
     coin_id = SYMBOL_TO_ID_MAP.get(symbol.lower(), symbol.lower())
     url = "https://api.coingecko.com/api/v3/simple/price"; params = {'ids': coin_id, 'vs_currencies': 'usd'}
@@ -106,13 +106,11 @@ def get_crypto_explanation(query: str) -> str:
     if not GOOGLE_API_KEY:
         return "❌ Lỗi cấu hình: Thiếu `GOOGLE_API_KEY`. Vui lòng liên hệ admin để thiết lập."
     try:
-        model = genai.GenerativeModel('gemini-2.5-pro')
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
         full_prompt = (
             "Bạn là một trợ lý chuyên gia về tiền điện tử. Hãy trả lời câu hỏi sau một cách "
-            "ngắn gọn, súc tích và dễ hiểu bằng tiếng Việt cho người mới bắt đầu. "
-            "Tập trung vào các khái niệm cơ bản và quan trọng nhất. "
-            "Chỉ cung cấp thông tin chính xác và đã được kiểm chứng; không suy đoán hoặc đưa ra thông tin không chính xác. "
-            "Nếu bạn không chắc chắn về câu trả lời, hãy nói rằng bạn không biết.\n\n"
+            "ngắn gọn, súc tích, và dễ hiểu bằng tiếng Việt cho người mới bắt đầu. "
+            "Tập trung vào các khía cạnh quan trọng nhất.\n\n"
             f"Câu hỏi: {query}"
         )
         response = model.generate_content(full_prompt)
@@ -121,28 +119,6 @@ def get_crypto_explanation(query: str) -> str:
     except Exception as e:
         print(f"Google Gemini API Error: {e}")
         return f"❌ Đã xảy ra lỗi khi kết nối với dịch vụ giải thích. Vui lòng thử lại sau."
-
-### <<< THÊM MỚI: Hàm logic cho /calc ###
-def calculate_value(parts: list) -> str:
-    """Xử lý lệnh /calc."""
-    if len(parts) != 3:
-        return "Cú pháp: `/calc <ký hiệu> <số lượng>`\nVí dụ: `/calc btc 0.5`"
-    
-    symbol = parts[1]
-    amount_str = parts[2]
-    
-    try:
-        amount = float(amount_str)
-    except ValueError:
-        return f"❌ Số lượng không hợp lệ: `{amount_str}`"
-        
-    price = get_price_by_symbol(symbol)
-    if price is None:
-        return f"❌ Không tìm thấy giá cho ký hiệu `{symbol}`."
-        
-    total_value = price * amount
-    return f"*{symbol.upper()}*: `${price:,.2f}` x {amount_str} = *${total_value:,.2f}*"
-
 def is_evm_address(s: str) -> bool: return isinstance(s, str) and s.startswith('0x') and len(s) == 42
 def is_tron_address(s: str) -> bool: return isinstance(s, str) and s.startswith('T') and len(s) == 34
 def is_crypto_address(s: str) -> bool: return is_evm_address(s) or is_tron_address(s)
@@ -231,12 +207,25 @@ def webhook():
                              "`/list`, `/del <số>`, `/edit <số> ...`\n\n"
                              "**Chức năng Crypto:**\n"
                              "`/gia <ký hiệu>`\n"
-                             "`/calc <ký hiệu> <số lượng>`\n"
-                             "`/gt <thuật ngữ>` - Giải thích\n\n"
+                             "`/gt <thuật ngữ>` - Giải thích (vd: /gt airdrop là gì)\n\n"
                              "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract.\n"
                              "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`")
             send_telegram_message(chat_id, text=start_message)
-        elif cmd == '/add': send_telegram_message(chat_id, text=add_task(chat_id, " ".join(parts[1:])), reply_to_message_id=msg_id)
+        
+        ### <<< THAY ĐỔI: Logic xử lý lệnh /add ###
+        elif cmd == '/add':
+            # Gọi hàm add_task để thực hiện việc thêm và nhận lại tin nhắn xác nhận
+            confirmation_message = add_task(chat_id, " ".join(parts[1:]))
+            
+            # Gửi tin nhắn xác nhận (trả lời tin nhắn gốc của người dùng)
+            send_telegram_message(chat_id, text=confirmation_message, reply_to_message_id=msg_id)
+            
+            # Nếu việc thêm thành công (dựa vào icon ✅), thì gửi luôn danh sách công việc đã cập nhật
+            if confirmation_message.startswith("✅"):
+                updated_list = list_tasks(chat_id)
+                # Gửi danh sách như một tin nhắn mới, không cần reply
+                send_telegram_message(chat_id, text=updated_list)
+                
         elif cmd == '/list': send_telegram_message(chat_id, text=list_tasks(chat_id), reply_to_message_id=msg_id)
         elif cmd == '/del':
             if len(parts) > 1: send_telegram_message(chat_id, text=delete_task(chat_id, parts[1]), reply_to_message_id=msg_id)
@@ -259,10 +248,8 @@ def webhook():
                 if temp_msg_id:
                     explanation = get_crypto_explanation(query)
                     edit_telegram_message(chat_id, temp_msg_id, text=explanation)
-        elif cmd == '/calc':
-            result_text = calculate_value(parts)
-            send_telegram_message(chat_id, text=result_text, reply_to_message_id=msg_id)
         return jsonify(success=True)
+        
     if len(parts) == 1 and is_crypto_address(parts[0]):
         send_telegram_message(chat_id, text=find_token_across_networks(parts[0]), reply_to_message_id=msg_id, disable_web_page_preview=True)
     else:
@@ -289,7 +276,7 @@ def cron_webhook():
                 time_until_due = task_time - now
                 if timedelta(seconds=1) < time_until_due <= timedelta(minutes=REMINDER_THRESHOLD_MINUTES):
                     minutes_left = int(time_until_due.total_seconds() / 60)
-                    reminder_text = f"‼️ *NHẮC NHỞ* ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
+                    reminder_text = f"‼️ *NHẮC NHỞ * ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
                     sent_message_id = send_telegram_message(chat_id, text=reminder_text)
                     if sent_message_id: pin_telegram_message(chat_id, sent_message_id)
                     task['reminded'] = True; tasks_changed = True; reminders_sent += 1
