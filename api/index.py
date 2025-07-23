@@ -20,7 +20,6 @@ SYMBOL_TO_ID_MAP = {
     'xrp': 'ripple', 'doge': 'dogecoin', 'shib': 'shiba-inu'
 }
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-COINGLASS_API_KEY = os.getenv("COINGLASS_API_KEY") # Biến môi trường mới
 
 if GOOGLE_API_KEY:
     try:
@@ -53,7 +52,8 @@ def add_task(chat_id, task_string: str) -> tuple[bool, str]:
     if not task_dt or not name_part: return False, "❌ Cú pháp sai. Dùng: `DD/MM HH:mm - Tên công việc`."
     if task_dt < datetime.now(TIMEZONE): return False, "❌ Không thể đặt lịch cho quá khứ."
     tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
-    tasks.append({"time_iso": task_dt.isoformat(), "name": name_part, "reminded": False})
+    ### <<< THAY ĐỔI: Không cần cờ 'reminded' nữa ###
+    tasks.append({"time_iso": task_dt.isoformat(), "name": name_part})
     tasks.sort(key=lambda x: x['time_iso'])
     kv.set(f"tasks:{chat_id}", json.dumps(tasks))
     return True, f"✅ Đã thêm lịch: *{name_part}*."
@@ -69,7 +69,9 @@ def edit_task(chat_id, index_str: str, new_task_string: str) -> tuple[bool, str]
     task_to_edit_iso = active_tasks[task_index]['time_iso']
     for task in user_tasks:
         if task['time_iso'] == task_to_edit_iso:
-            task['time_iso'] = new_task_dt.isoformat(); task['name'] = new_name_part; task['reminded'] = False; break
+            task['time_iso'] = new_task_dt.isoformat(); task['name'] = new_name_part
+            ### <<< THAY ĐỔI: Không cần cờ 'reminded' nữa ###
+            break
     user_tasks.sort(key=lambda x: x['time_iso'])
     kv.set(f"tasks:{chat_id}", json.dumps(user_tasks))
     return True, f"✅ Đã sửa công việc số *{task_index + 1}*."
@@ -85,7 +87,7 @@ def list_tasks(chat_id) -> str:
     return "\n".join(result_lines)
 def delete_task(chat_id, task_index_str: str) -> tuple[bool, str]:
     if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
-    try: task_index = int(index_str) - 1; assert task_index >= 0
+    try: task_index = int(task_index_str) - 1; assert task_index >= 0
     except (ValueError, AssertionError): return False, "❌ Số thứ tự không hợp lệ."
     user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
     active_tasks = [t for t in user_tasks if datetime.fromisoformat(t['time_iso']) > datetime.now(TIMEZONE)]
@@ -134,57 +136,6 @@ def translate_crypto_text(text_to_translate: str) -> str:
     except Exception as e:
         print(f"Google Gemini API Error (Translation): {e}")
         return f"❌ Đã xảy ra lỗi khi kết nối với dịch vụ dịch thuật."
-
-### <<< THAY ĐỔI: Hàm logic cho /vol được viết lại hoàn toàn với Coinglass API mới ###
-def get_futures_data(symbol: str) -> str:
-    if not COINGLASS_API_KEY:
-        return "❌ Lỗi cấu hình: Thiếu `COINGLASS_API_KEY`. Vui lòng liên hệ admin để thiết lập."
-    
-    url = "https://open-api.coinglass.com/api/v3/futures/oi-history"
-    headers = {"coinglass-api-key": COINGLASS_API_KEY}
-    # timeType h24 sẽ trả về dữ liệu 24h qua theo từng giờ
-    params = {"symbol": symbol.upper(), "timeType": "h24"}
-    
-    try:
-        res = requests.get(url, headers=headers, params=params, timeout=20)
-        if res.status_code != 200 or not res.json().get('success'):
-            error_msg = res.json().get('msg', 'Lỗi không xác định')
-            return f"❌ Lỗi từ API Coinglass: {error_msg} (Code: {res.status_code})."
-        
-        data_list = res.json().get('data', {}).get('list', [])
-        
-        if not data_list or len(data_list) < 2:
-            return f"❌ Không đủ dữ liệu Futures cho *{symbol.upper()}* để so sánh."
-
-        # Lấy dữ liệu mới nhất và 24h trước
-        latest_point = data_list[-1]
-        prev_24h_point = data_list[0] # Điểm đầu tiên trong list 24h là điểm của 24h trước
-
-        current_vol = latest_point.get('volUsd', 0)
-        current_oi = latest_point.get('oiUsd', 0)
-        prev_vol = prev_24h_point.get('volUsd', 0)
-        prev_oi = prev_24h_point.get('oiUsd', 0)
-
-        # Tính toán % thay đổi
-        try: vol_change_pct = ((current_vol - prev_vol) / prev_vol) * 100 if prev_vol > 0 else 0
-        except ZeroDivisionError: vol_change_pct = 0
-        try: oi_change_pct = ((current_oi - prev_oi) / prev_oi) * 100 if prev_oi > 0 else 0
-        except ZeroDivisionError: oi_change_pct = 0
-
-        vol_emoji = '📈' if vol_change_pct >= 0 else '📉'
-        oi_emoji = '📈' if oi_change_pct >= 0 else '📉'
-
-        return (f"📊 *Dữ liệu Futures cho {symbol.upper()}:*\n\n"
-                f"📈 *Tổng Volume (24h):* `${current_vol:,.2f}`\n"
-                f"{vol_emoji} Thay đổi: `{vol_change_pct:+.2f}%`\n\n"
-                f"📉 *Tổng Open Interest:* `${current_oi:,.2f}`\n"
-                f"{oi_emoji} Thay đổi: `{oi_change_pct:+.2f}%`\n\n"
-                f"_(Dữ liệu được tổng hợp từ Coinglass)_")
-
-    except requests.RequestException as e:
-        print(f"Request exception for Coinglass API: {e}")
-        return "❌ Lỗi mạng khi lấy dữ liệu phái sinh."
-
 def is_evm_address(s: str) -> bool: return isinstance(s, str) and s.startswith('0x') and len(s) == 42
 def is_tron_address(s: str) -> bool: return isinstance(s, str) and s.startswith('T') and len(s) == 34
 def is_crypto_address(s: str) -> bool: return is_evm_address(s) or is_tron_address(s)
@@ -272,7 +223,7 @@ def webhook():
     if cmd.startswith('/'):
         if cmd == "/start":
             start_message = ("Chào mừng! Bot đã sẵn sàng.\n\n"
-                             "*Bot sẽ tự động PIN và THÔNG BÁO nhắc nhở cho cả nhóm.*\n"
+                             "*Bot sẽ liên tục PIN và THÔNG BÁO nhắc nhở trong vòng 30 phút trước khi công việc đến hạn.*\n"
                              "*(Lưu ý: Bot cần có quyền Admin để Pin tin nhắn)*\n\n"
                              "**Chức năng Lịch hẹn:**\n"
                              "`/add DD/MM HH:mm - Tên`\n"
@@ -280,7 +231,6 @@ def webhook():
                              "**Chức năng Crypto:**\n"
                              "`/gia <ký hiệu>`\n"
                              "`/calc <ký hiệu> <số lượng>`\n"
-                             "`/vol <ký hiệu>` - Volume & OI Futures\n"
                              "`/gt <thuật ngữ>`\n"
                              "`/tr <văn bản tiếng Anh>`\n\n"
                              "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract (hỗ trợ EVM & Tron).\n"
@@ -321,15 +271,6 @@ def webhook():
                 text_to_translate = " ".join(parts[1:])
                 temp_msg_id = send_telegram_message(chat_id, text="⏳ Đang dịch...", reply_to_message_id=msg_id)
                 if temp_msg_id: edit_telegram_message(chat_id, temp_msg_id, text=translate_crypto_text(text_to_translate))
-        elif cmd == '/vol':
-            if len(parts) < 2:
-                send_telegram_message(chat_id, text="Cú pháp: `/vol <ký hiệu>`\nVí dụ: `/vol btc`", reply_to_message_id=msg_id)
-            else:
-                symbol = parts[1]
-                temp_msg_id = send_telegram_message(chat_id, text=f"📊 Đang tổng hợp dữ liệu Futures cho *{symbol.upper()}*...", reply_to_message_id=msg_id)
-                if temp_msg_id:
-                    result = get_futures_data(symbol)
-                    edit_telegram_message(chat_id, temp_msg_id, text=result)
         return jsonify(success=True)
     if len(parts) == 1 and is_crypto_address(parts[0]):
         send_telegram_message(chat_id, text=find_token_across_networks(parts[0]), reply_to_message_id=msg_id, disable_web_page_preview=True)
@@ -350,19 +291,34 @@ def cron_webhook():
     reminders_sent = 0
     for key in kv.scan_iter("tasks:*"):
         chat_id = key.split(':')[1]; user_tasks = json.loads(kv.get(key) or '[]')
-        tasks_changed = False; now = datetime.now(TIMEZONE)
+        now = datetime.now(TIMEZONE)
         for task in user_tasks:
-            if not task.get("reminded", False):
-                task_time = datetime.fromisoformat(task['time_iso'])
-                time_until_due = task_time - now
-                if timedelta(seconds=1) < time_until_due <= timedelta(minutes=REMINDER_THRESHOLD_MINUTES):
+            task_time = datetime.fromisoformat(task['time_iso'])
+            time_until_due = task_time - now
+            
+            ### <<< THAY ĐỔI: Logic nhắc nhở lặp lại ###
+            if timedelta(seconds=1) < time_until_due <= timedelta(minutes=REMINDER_THRESHOLD_MINUTES):
+                # Để tránh spam, chúng ta chỉ nhắc lại nếu lần nhắc trước đó đã cách đây một khoảng thời gian
+                # Chúng ta sẽ lưu timestamp của lần nhắc cuối cùng vào Redis
+                last_reminded_key = f"last_reminded:{chat_id}:{task['time_iso']}"
+                last_reminded_ts = kv.get(last_reminded_key)
+                
+                # Chỉ nhắc lại nếu chưa từng nhắc, hoặc lần nhắc cuối đã hơn 4 phút trước
+                # (để tránh trường hợp cron job chạy sát nhau)
+                if not last_reminded_ts or (datetime.now().timestamp() - float(last_reminded_ts)) > 240:
                     minutes_left = int(time_until_due.total_seconds() / 60)
                     reminder_text = f"‼️ *NHẮC NHỞ @all* ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
                     sent_message_id = send_telegram_message(chat_id, text=reminder_text)
-                    if sent_message_id: pin_telegram_message(chat_id, sent_message_id)
-                    task['reminded'] = True; tasks_changed = True; reminders_sent += 1
-        if tasks_changed:
-            kv.set(key, json.dumps(user_tasks))
+                    if sent_message_id:
+                        pin_telegram_message(chat_id, sent_message_id)
+                    
+                    # Cập nhật lại timestamp của lần nhắc cuối
+                    kv.set(last_reminded_key, datetime.now().timestamp())
+                    # Đặt thời gian hết hạn cho key này (ví dụ: 1 giờ) để tự động dọn dẹp
+                    kv.expire(last_reminded_key, 3600) 
+                    
+                    reminders_sent += 1
+
     result = {"status": "success", "reminders_sent": reminders_sent}
     print(result)
     return jsonify(result)
