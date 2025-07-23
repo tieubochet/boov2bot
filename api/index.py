@@ -20,6 +20,7 @@ SYMBOL_TO_ID_MAP = {
     'xrp': 'ripple', 'doge': 'dogecoin', 'shib': 'shiba-inu'
 }
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+COINGLASS_API_KEY = os.getenv("COINGLASS_API_KEY") # Biến môi trường mới
 
 if GOOGLE_API_KEY:
     try:
@@ -36,7 +37,7 @@ try:
 except Exception as e:
     print(f"FATAL: Could not connect to Redis. Error: {e}"); kv = None
 
-# --- LOGIC QUẢN LÝ CÔNG VIỆC ---
+# --- LOGIC QUẢN LÝ CÔNG VIỆC (Không thay đổi) ---
 def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | None]:
     try:
         time_part, name_part = task_string.split(' - ', 1)
@@ -122,59 +123,66 @@ def calculate_value(parts: list) -> str:
     if price is None: return f"❌ Không tìm thấy giá cho ký hiệu `{symbol}`."
     total_value = price * amount
     return f"*{symbol.upper()}*: `${price:,.2f}` x {amount_str} = *${total_value:,.2f}*"
-
-### <<< SỬA LỖI & CẢI TIẾN: Logic cho /vol được viết lại hoàn toàn ###
-def get_futures_data(symbol: str) -> str:
-    if not kv: return "Lỗi: Chức năng /vol không khả dụng do không kết nối được DB."
-    url = "https://api.coingecko.com/api/v3/derivatives/exchanges"
-    params = {'include_tickers': 'unexpired'}
+def translate_crypto_text(text_to_translate: str) -> str:
+    if not GOOGLE_API_KEY: return "❌ Lỗi cấu hình: Thiếu `GOOGLE_API_KEY`."
     try:
-        res = requests.get(url, params=params, timeout=20)
-        if res.status_code != 200: return f"❌ Lỗi khi gọi API CoinGecko (Code: {res.status_code})."
-        
-        exchanges = res.json()
-        total_volume_24h = 0.0; total_open_interest = 0.0; found = False
-        
-        for exchange in exchanges:
-            for ticker in exchange.get('tickers', []):
-                # Logic tìm kiếm linh hoạt hơn
-                if ticker.get('contract_type') == 'perpetual':
-                    base_match = ticker.get('base') == symbol.upper()
-                    # startsWith an toàn hơn 'in'
-                    symbol_match = ticker.get('symbol', '').startswith(symbol.upper())
-                    
-                    if base_match or symbol_match:
-                        found = True
-                        total_volume_24h += ticker.get('converted_volume', {}).get('usd', 0)
-                        total_open_interest += ticker.get('open_interest', {}).get('usd', 0)
-        
-        if not found: return f"❌ Không tìm thấy dữ liệu Futures cho *{symbol.upper()}*."
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+        prompt = (f"Act as an expert translator specializing in finance and cryptocurrency. Your task is to translate the following English text into Vietnamese. Use accurate and natural-sounding financial/crypto jargon appropriate for a savvy investment community. Preserve the original nuance and meaning. Only provide the final Vietnamese translation, without any additional explanation or preamble.\n\nEnglish text to translate:\n\"\"\"{text_to_translate}\"\"\"")
+        response = model.generate_content(prompt)
+        if response.parts: return response.text
+        else: return "❌ Không thể dịch văn bản này."
+    except Exception as e:
+        print(f"Google Gemini API Error (Translation): {e}")
+        return f"❌ Đã xảy ra lỗi khi kết nối với dịch vụ dịch thuật."
 
-        redis_key = f"futures_snapshot:{symbol.lower()}"
-        previous_data_json = kv.get(redis_key)
-        previous_data = json.loads(previous_data_json) if previous_data_json else None
+### <<< THAY ĐỔI: Hàm logic cho /vol được viết lại hoàn toàn với Coinglass API ###
+def get_futures_data(symbol: str) -> str:
+    if not COINGLASS_API_KEY:
+        return "❌ Lỗi cấu hình: Thiếu `COINGLASS_API_KEY`. Vui lòng liên hệ admin để thiết lập."
+    
+    url = "https://open-api.coinglass.com/api/v3/openInterest/chart"
+    headers = {"coinglass-api-key": COINGLASS_API_KEY}
+    # Lấy dữ liệu 2 ngày gần nhất theo giờ để đảm bảo có đủ điểm dữ liệu cho 24h
+    params = {"symbol": symbol.upper(), "currency": "USD", "interval": "h1"}
+    
+    try:
+        res = requests.get(url, headers=headers, params=params, timeout=20)
+        if res.status_code != 200 or not res.json().get('success'):
+            error_msg = res.json().get('msg', 'Lỗi không xác định')
+            return f"❌ Lỗi từ API Coinglass: {error_msg} (Code: {res.status_code})."
         
-        current_snapshot = {"timestamp": datetime.now().isoformat(), "volume": total_volume_24h, "oi": total_open_interest}
-        kv.set(redis_key, json.dumps(current_snapshot))
+        chart_data = res.json().get('data', {}).get('dataMap', [])
         
-        result_string = (f"📊 *Dữ liệu Futures cho {symbol.upper()}:*\n\n"
-                         f"📈 *Tổng Volume (24h):* `${total_volume_24h:,.2f}`\n"
-                         f"📉 *Tổng Open Interest:* `${total_open_interest:,.2f}`")
+        if not chart_data or len(chart_data) < 25: # Cần ít nhất 25 điểm dữ liệu giờ
+            return f"❌ Không đủ dữ liệu lịch sử cho *{symbol.upper()}* để so sánh."
 
-        if previous_data:
-            prev_vol = previous_data.get('volume', 0); prev_oi = previous_data.get('oi', 0)
-            try: vol_change_pct = ((total_volume_24h - prev_vol) / prev_vol) * 100 if prev_vol > 0 else 0
-            except ZeroDivisionError: vol_change_pct = 0
-            try: oi_change_pct = ((total_open_interest - prev_oi) / prev_oi) * 100 if prev_oi > 0 else 0
-            except ZeroDivisionError: oi_change_pct = 0
-            vol_emoji = '📈' if vol_change_pct >= 0 else '📉'; oi_emoji = '📈' if oi_change_pct >= 0 else '📉'
-            change_string = (f"\n\n*So với lần check trước:*\n"
-                             f"{vol_emoji} Volume: `{vol_change_pct:+.2f}%`\n"
-                             f"{oi_emoji} Open Interest: `{oi_change_pct:+.2f}%`")
-            result_string += change_string
-        return result_string
+        # Lấy dữ liệu mới nhất và 24h trước
+        latest_point = chart_data[-1]
+        prev_24h_point = chart_data[-25]
+
+        current_vol = latest_point.get('vol', 0)
+        current_oi = latest_point.get('oi', 0)
+        prev_vol = prev_24h_point.get('vol', 0)
+        prev_oi = prev_24h_point.get('oi', 0)
+
+        # Tính toán % thay đổi
+        try: vol_change_pct = ((current_vol - prev_vol) / prev_vol) * 100 if prev_vol > 0 else 0
+        except ZeroDivisionError: vol_change_pct = 0
+        try: oi_change_pct = ((current_oi - prev_oi) / prev_oi) * 100 if prev_oi > 0 else 0
+        except ZeroDivisionError: oi_change_pct = 0
+
+        vol_emoji = '📈' if vol_change_pct >= 0 else '📉'
+        oi_emoji = '📈' if oi_change_pct >= 0 else '📉'
+
+        return (f"📊 *Dữ liệu Futures cho {symbol.upper()}:*\n\n"
+                f"📈 *Tổng Volume (24h):* `${current_vol:,.2f}`\n"
+                f"{vol_emoji} Thay đổi: `{vol_change_pct:+.2f}%`\n\n"
+                f"📉 *Tổng Open Interest:* `${current_oi:,.2f}`\n"
+                f"{oi_emoji} Thay đổi: `{oi_change_pct:+.2f}%`\n\n"
+                f"_(Dữ liệu được tổng hợp từ Coinglass)_")
+
     except requests.RequestException as e:
-        print(f"Request exception for Coingecko Derivatives: {e}")
+        print(f"Request exception for Coinglass API: {e}")
         return "❌ Lỗi mạng khi lấy dữ liệu phái sinh."
 
 def is_evm_address(s: str) -> bool: return isinstance(s, str) and s.startswith('0x') and len(s) == 42
