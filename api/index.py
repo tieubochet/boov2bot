@@ -103,22 +103,16 @@ def get_price_by_symbol(symbol: str) -> float | None:
         return res.json().get(coin_id, {}).get('usd') if res.status_code == 200 else None
     except requests.RequestException: return None
 def get_crypto_explanation(query: str) -> str:
-    if not GOOGLE_API_KEY:
-        return "❌ Lỗi cấu hình: Thiếu `GOOGLE_API_KEY`. Vui lòng liên hệ admin để thiết lập."
+    if not GOOGLE_API_KEY: return "❌ Lỗi cấu hình: Thiếu `GOOGLE_API_KEY`."
     try:
         model = genai.GenerativeModel('gemini-1.5-pro-latest')
-        full_prompt = (
-            "Bạn là một trợ lý chuyên gia về tiền điện tử. Hãy trả lời câu hỏi sau một cách "
-            "ngắn gọn, súc tích, và dễ hiểu bằng tiếng Việt cho người mới bắt đầu. "
-            "Tập trung vào các khía cạnh quan trọng nhất.\n\n"
-            f"Câu hỏi: {query}"
-        )
+        full_prompt = (f"Bạn là một trợ lý chuyên gia về tiền điện tử. Hãy trả lời câu hỏi sau một cách ngắn gọn, súc tích, và dễ hiểu bằng tiếng Việt cho người mới bắt đầu. Tập trung vào các khía cạnh quan trọng nhất.\n\nCâu hỏi: {query}")
         response = model.generate_content(full_prompt)
         if response.parts: return response.text
-        else: return "❌ Không thể tạo câu trả lời cho câu hỏi này. Có thể nội dung đã vi phạm chính sách an toàn."
+        else: return "❌ Không thể tạo câu trả lời cho câu hỏi này."
     except Exception as e:
         print(f"Google Gemini API Error: {e}")
-        return f"❌ Đã xảy ra lỗi khi kết nối với dịch vụ giải thích. Vui lòng thử lại sau."
+        return f"❌ Đã xảy ra lỗi khi kết nối với dịch vụ giải thích."
 def is_evm_address(s: str) -> bool: return isinstance(s, str) and s.startswith('0x') and len(s) == 42
 def is_tron_address(s: str) -> bool: return isinstance(s, str) and s.startswith('T') and len(s) == 34
 def is_crypto_address(s: str) -> bool: return is_evm_address(s) or is_tron_address(s)
@@ -129,8 +123,7 @@ def send_telegram_message(chat_id, text, **kwargs) -> int | None:
         response = requests.post(url, json=payload, timeout=10)
         if response.status_code == 200 and response.json().get('ok'): return response.json().get('result', {}).get('message_id')
         print(f"Error sending message, response: {response.text}"); return None
-    except requests.RequestException as e:
-        print(f"Error sending message: {e}"); return None
+    except requests.RequestException as e: print(f"Error sending message: {e}"); return None
 def pin_telegram_message(chat_id, message_id):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/pinChatMessage"
     payload = {'chat_id': chat_id, 'message_id': message_id, 'disable_notification': False}
@@ -212,33 +205,39 @@ def webhook():
                              "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`")
             send_telegram_message(chat_id, text=start_message)
         
-        ### <<< THAY ĐỔI: Logic xử lý lệnh /add ###
         elif cmd == '/add':
-            # Gọi hàm add_task để thực hiện việc thêm và nhận lại tin nhắn xác nhận
             confirmation_message = add_task(chat_id, " ".join(parts[1:]))
-            
-            # Gửi tin nhắn xác nhận (trả lời tin nhắn gốc của người dùng)
             send_telegram_message(chat_id, text=confirmation_message, reply_to_message_id=msg_id)
-            
-            # Nếu việc thêm thành công (dựa vào icon ✅), thì gửi luôn danh sách công việc đã cập nhật
             if confirmation_message.startswith("✅"):
-                updated_list = list_tasks(chat_id)
-                # Gửi danh sách như một tin nhắn mới, không cần reply
-                send_telegram_message(chat_id, text=updated_list)
+                send_telegram_message(chat_id, text=list_tasks(chat_id))
                 
         elif cmd == '/list': send_telegram_message(chat_id, text=list_tasks(chat_id), reply_to_message_id=msg_id)
+        
         elif cmd == '/del':
-            if len(parts) > 1: send_telegram_message(chat_id, text=delete_task(chat_id, parts[1]), reply_to_message_id=msg_id)
-            else: send_telegram_message(chat_id, text="Cú pháp: `/del <số>`", reply_to_message_id=msg_id)
+            if len(parts) > 1:
+                confirmation_message = delete_task(chat_id, parts[1])
+                send_telegram_message(chat_id, text=confirmation_message, reply_to_message_id=msg_id)
+                if confirmation_message.startswith("✅"):
+                    send_telegram_message(chat_id, text=list_tasks(chat_id))
+            else:
+                send_telegram_message(chat_id, text="Cú pháp: `/del <số>`", reply_to_message_id=msg_id)
+                
         elif cmd == '/edit':
-            if len(parts) < 3: send_telegram_message(chat_id, text="Cú pháp: `/edit <số> DD/MM HH:mm - Tên mới`", reply_to_message_id=msg_id)
-            else: send_telegram_message(chat_id, text=edit_task(chat_id, parts[1], " ".join(parts[2:])), reply_to_message_id=msg_id)
+            if len(parts) < 3:
+                send_telegram_message(chat_id, text="Cú pháp: `/edit <số> DD/MM HH:mm - Tên mới`", reply_to_message_id=msg_id)
+            else:
+                confirmation_message = edit_task(chat_id, parts[1], " ".join(parts[2:]))
+                send_telegram_message(chat_id, text=confirmation_message, reply_to_message_id=msg_id)
+                if confirmation_message.startswith("✅"):
+                    send_telegram_message(chat_id, text=list_tasks(chat_id))
+
         elif cmd == '/gia':
             if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/gia <ký hiệu>`", reply_to_message_id=msg_id)
             else:
                 price = get_price_by_symbol(parts[1])
                 if price: send_telegram_message(chat_id, text=f"Giá của *{parts[1].upper()}* là: `${price:,.4f}`", reply_to_message_id=msg_id)
                 else: send_telegram_message(chat_id, text=f"❌ Không tìm thấy giá cho `{parts[1]}`.", reply_to_message_id=msg_id)
+                
         elif cmd == '/gt':
             if len(parts) < 2:
                 send_telegram_message(chat_id, text="Cú pháp: `/gt <câu hỏi>`", reply_to_message_id=msg_id)
@@ -276,7 +275,7 @@ def cron_webhook():
                 time_until_due = task_time - now
                 if timedelta(seconds=1) < time_until_due <= timedelta(minutes=REMINDER_THRESHOLD_MINUTES):
                     minutes_left = int(time_until_due.total_seconds() / 60)
-                    reminder_text = f"‼️ *NHẮC NHỞ * ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
+                    reminder_text = f"‼️ *NHẮC NHỞ @all* ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
                     sent_message_id = send_telegram_message(chat_id, text=reminder_text)
                     if sent_message_id: pin_telegram_message(chat_id, sent_message_id)
                     task['reminded'] = True; tasks_changed = True; reminders_sent += 1
