@@ -119,7 +119,7 @@ def translate_crypto_text(text_to_translate: str) -> str:
     if not GOOGLE_API_KEY:
         return "❌ Lỗi cấu hình: Thiếu `GOOGLE_API_KEY`."
     try:
-        model = genai.GenerativeModel('gemini-2.5-pro')
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
         # Prompt chuyên biệt để AI đóng vai trò thông dịch viên
         prompt = (
             "Act as an expert translator specializing in finance and cryptocurrency. "
@@ -267,7 +267,7 @@ def webhook():
                 send_telegram_message(chat_id, text="Cú pháp: `/tr <văn bản tiếng Anh>`", reply_to_message_id=msg_id)
             else:
                 text_to_translate = " ".join(parts[1:])
-                temp_msg_id = send_telegram_message(chat_id, text="", reply_to_message_id=msg_id)
+                temp_msg_id = send_telegram_message(chat_id, text="⏳ Đang dịch, vui lòng chờ...", reply_to_message_id=msg_id)
                 if temp_msg_id:
                     translation = translate_crypto_text(text_to_translate)
                     edit_telegram_message(chat_id, temp_msg_id, text=translation)
