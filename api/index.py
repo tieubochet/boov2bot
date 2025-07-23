@@ -20,7 +20,7 @@ SYMBOL_TO_ID_MAP = {
     'xrp': 'ripple', 'doge': 'dogecoin', 'shib': 'shiba-inu'
 }
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-COINGLASS_API_KEY = os.getenv("COINGLASS_API_KEY")
+COINGLASS_API_KEY = os.getenv("COINGLASS_API_KEY") # Biến môi trường mới
 
 if GOOGLE_API_KEY:
     try:
@@ -85,7 +85,7 @@ def list_tasks(chat_id) -> str:
     return "\n".join(result_lines)
 def delete_task(chat_id, task_index_str: str) -> tuple[bool, str]:
     if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
-    try: task_index = int(task_index_str) - 1; assert task_index >= 0
+    try: task_index = int(index_str) - 1; assert task_index >= 0
     except (ValueError, AssertionError): return False, "❌ Số thứ tự không hợp lệ."
     user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
     active_tasks = [t for t in user_tasks if datetime.fromisoformat(t['time_iso']) > datetime.now(TIMEZONE)]
@@ -140,11 +140,10 @@ def get_futures_data(symbol: str) -> str:
     if not COINGLASS_API_KEY:
         return "❌ Lỗi cấu hình: Thiếu `COINGLASS_API_KEY`. Vui lòng liên hệ admin để thiết lập."
     
-    # Endpoint mới và chính xác
-    url = "https://open-api.coinglass.com/api/v3/futures/openInterest-volume"
+    url = "https://open-api.coinglass.com/api/v3/futures/oi-history"
     headers = {"coinglass-api-key": COINGLASS_API_KEY}
-    # time_type=1 là cho dữ liệu 24h
-    params = {"symbol": symbol.upper(), "time_type": "1"}
+    # timeType h24 sẽ trả về dữ liệu 24h qua theo từng giờ
+    params = {"symbol": symbol.upper(), "timeType": "h24"}
     
     try:
         res = requests.get(url, headers=headers, params=params, timeout=20)
@@ -152,23 +151,33 @@ def get_futures_data(symbol: str) -> str:
             error_msg = res.json().get('msg', 'Lỗi không xác định')
             return f"❌ Lỗi từ API Coinglass: {error_msg} (Code: {res.status_code})."
         
-        data = res.json().get('data')
-        if not data:
-            return f"❌ Không tìm thấy dữ liệu Futures cho *{symbol.upper()}* trên Coinglass."
+        data_list = res.json().get('data', {}).get('list', [])
+        
+        if not data_list or len(data_list) < 2:
+            return f"❌ Không đủ dữ liệu Futures cho *{symbol.upper()}* để so sánh."
 
-        # Lấy dữ liệu trực tiếp từ API
-        total_volume_24h = data.get('h24Vol', 0)
-        vol_change_pct = data.get('h24VolChange', 0) * 100 # API trả về dạng 0.xx, cần nhân 100
-        total_open_interest = data.get('oiUsd', 0)
-        oi_change_pct = data.get('h24OiChange', 0) * 100
+        # Lấy dữ liệu mới nhất và 24h trước
+        latest_point = data_list[-1]
+        prev_24h_point = data_list[0] # Điểm đầu tiên trong list 24h là điểm của 24h trước
+
+        current_vol = latest_point.get('volUsd', 0)
+        current_oi = latest_point.get('oiUsd', 0)
+        prev_vol = prev_24h_point.get('volUsd', 0)
+        prev_oi = prev_24h_point.get('oiUsd', 0)
+
+        # Tính toán % thay đổi
+        try: vol_change_pct = ((current_vol - prev_vol) / prev_vol) * 100 if prev_vol > 0 else 0
+        except ZeroDivisionError: vol_change_pct = 0
+        try: oi_change_pct = ((current_oi - prev_oi) / prev_oi) * 100 if prev_oi > 0 else 0
+        except ZeroDivisionError: oi_change_pct = 0
 
         vol_emoji = '📈' if vol_change_pct >= 0 else '📉'
         oi_emoji = '📈' if oi_change_pct >= 0 else '📉'
 
         return (f"📊 *Dữ liệu Futures cho {symbol.upper()}:*\n\n"
-                f"📈 *Tổng Volume (24h):* `${total_volume_24h:,.2f}`\n"
+                f"📈 *Tổng Volume (24h):* `${current_vol:,.2f}`\n"
                 f"{vol_emoji} Thay đổi: `{vol_change_pct:+.2f}%`\n\n"
-                f"📉 *Tổng Open Interest:* `${total_open_interest:,.2f}`\n"
+                f"📉 *Tổng Open Interest:* `${current_oi:,.2f}`\n"
                 f"{oi_emoji} Thay đổi: `{oi_change_pct:+.2f}%`\n\n"
                 f"_(Dữ liệu được tổng hợp từ Coinglass)_")
 
