@@ -36,7 +36,7 @@ try:
 except Exception as e:
     print(f"FATAL: Could not connect to Redis. Error: {e}"); kv = None
 
-# --- LOGIC QUẢN LÝ CÔNG VIỆC (Cập nhật return values) ---
+# --- LOGIC QUẢN LÝ CÔNG VIỆC (Không thay đổi) ---
 def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | None]:
     try:
         time_part, name_part = task_string.split(' - ', 1)
@@ -46,7 +46,6 @@ def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | Non
         dt_naive = datetime.strptime(time_part.strip(), '%d/%m %H:%M')
         return now.replace(month=dt_naive.month, day=dt_naive.day, hour=dt_naive.hour, minute=dt_naive.minute, second=0, microsecond=0), name_part
     except ValueError: return None, None
-
 def add_task(chat_id, task_string: str) -> tuple[bool, str]:
     if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
     task_dt, name_part = parse_task_from_string(task_string)
@@ -57,7 +56,6 @@ def add_task(chat_id, task_string: str) -> tuple[bool, str]:
     tasks.sort(key=lambda x: x['time_iso'])
     kv.set(f"tasks:{chat_id}", json.dumps(tasks))
     return True, f"✅ Đã thêm lịch: *{name_part}*."
-
 def edit_task(chat_id, index_str: str, new_task_string: str) -> tuple[bool, str]:
     if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
     try: task_index = int(index_str) - 1; assert task_index >= 0
@@ -74,7 +72,6 @@ def edit_task(chat_id, index_str: str, new_task_string: str) -> tuple[bool, str]
     user_tasks.sort(key=lambda x: x['time_iso'])
     kv.set(f"tasks:{chat_id}", json.dumps(user_tasks))
     return True, f"✅ Đã sửa công việc số *{task_index + 1}*."
-
 def list_tasks(chat_id) -> str:
     if not kv: return "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
     user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
@@ -85,7 +82,6 @@ def list_tasks(chat_id) -> str:
     for i, task in enumerate(active_tasks):
         result_lines.append(f"*{i+1}.* `{datetime.fromisoformat(task['time_iso']).strftime('%H:%M %d/%m')}` - {task['name']}")
     return "\n".join(result_lines)
-
 def delete_task(chat_id, task_index_str: str) -> tuple[bool, str]:
     if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
     try: task_index = int(task_index_str) - 1; assert task_index >= 0
@@ -109,7 +105,7 @@ def get_price_by_symbol(symbol: str) -> float | None:
 def get_crypto_explanation(query: str) -> str:
     if not GOOGLE_API_KEY: return "❌ Lỗi cấu hình: Thiếu `GOOGLE_API_KEY`."
     try:
-        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+        model = genai.GenerativeModel('gemini-2.5-pro')
         full_prompt = (f"Bạn là một trợ lý chuyên gia về tiền điện tử. Hãy trả lời câu hỏi sau một cách ngắn gọn, súc tích, và dễ hiểu bằng tiếng Việt cho người mới bắt đầu. Tập trung vào các khía cạnh quan trọng nhất.\n\nCâu hỏi: {query}")
         response = model.generate_content(full_prompt)
         if response.parts: return response.text
@@ -117,6 +113,31 @@ def get_crypto_explanation(query: str) -> str:
     except Exception as e:
         print(f"Google Gemini API Error: {e}")
         return f"❌ Đã xảy ra lỗi khi kết nối với dịch vụ giải thích."
+
+### <<< THÊM MỚI: Hàm logic cho /tr ###
+def translate_crypto_text(text_to_translate: str) -> str:
+    if not GOOGLE_API_KEY:
+        return "❌ Lỗi cấu hình: Thiếu `GOOGLE_API_KEY`."
+    try:
+        model = genai.GenerativeModel('gemini-2.5-pro')
+        # Prompt chuyên biệt để AI đóng vai trò thông dịch viên
+        prompt = (
+            "Act as an expert translator specializing in finance and cryptocurrency. "
+            "Your task is to translate the following text into Vietnamese. "
+            "Use accurate and natural-sounding financial/crypto jargon appropriate for a savvy investment community. "
+            "Preserve the original nuance and meaning. Only provide the final Vietnamese translation, without any additional explanation or preamble.\n\n"
+            "Text to translate:\n"
+            f"\"\"\"{text_to_translate}\"\"\""
+        )
+        response = model.generate_content(prompt)
+        if response.parts:
+            return response.text
+        else:
+            return "❌ Không thể dịch văn bản này. Có thể nội dung đã vi phạm chính sách an toàn."
+    except Exception as e:
+        print(f"Google Gemini API Error (Translation): {e}")
+        return f"❌ Đã xảy ra lỗi khi kết nối với dịch vụ dịch thuật."
+
 def is_evm_address(s: str) -> bool: return isinstance(s, str) and s.startswith('0x') and len(s) == 42
 def is_tron_address(s: str) -> bool: return isinstance(s, str) and s.startswith('T') and len(s) == 34
 def is_crypto_address(s: str) -> bool: return is_evm_address(s) or is_tron_address(s)
@@ -144,12 +165,6 @@ def answer_callback_query(cb_id):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
     try: requests.post(url, json={'callback_query_id': cb_id}, timeout=5)
     except requests.RequestException as e: print(f"Error answering callback: {e}")
-def delete_telegram_message(chat_id, message_id):
-    """Xóa một tin nhắn."""
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
-    payload = {'chat_id': chat_id, 'message_id': message_id}
-    try: requests.post(url, json=payload, timeout=5)
-    except requests.RequestException as e: print(f"Error deleting message: {e}")
 def find_token_across_networks(address: str) -> str:
     for network in AUTO_SEARCH_NETWORKS:
         url = f"https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{address}?include=top_pools"
@@ -186,6 +201,11 @@ def process_portfolio_text(message_text: str) -> str | None:
         except requests.RequestException: result_lines.append(f"🔌 Lỗi mạng khi lấy giá cho `{address[:10]}...`")
     if valid_lines_count == 0: return None
     return "\n".join(result_lines) + f"\n--------------------\n*Tổng cộng: *${total_value:,.2f}**"
+def delete_telegram_message(chat_id, message_id):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
+    payload = {'chat_id': chat_id, 'message_id': message_id}
+    try: requests.post(url, json=payload, timeout=5)
+    except requests.RequestException as e: print(f"Error deleting message: {e}")
 
 # --- WEB SERVER (FLASK) ---
 app = Flask(__name__)
@@ -204,37 +224,31 @@ def webhook():
     text = data["message"]["text"].strip(); parts = text.split(); cmd = parts[0].lower()
     if cmd.startswith('/'):
         if cmd == "/start":
-            start_message = ("Chào mừng! Bot đã sẵn sàng.\n\n"
-                             "*Bot sẽ tự động PIN và THÔNG BÁO nhắc nhở cho cả nhóm.*\n"
-                             "*(Lưu ý: Bot cần có quyền Admin để Pin tin nhắn)*\n\n"
+            start_message = ("Gòi, cần gì fen?\n\n"
                              "**Chức năng Lịch hẹn:**\n"
                              "`/add DD/MM HH:mm - Tên`\n"
                              "`/list`, `/del <số>`, `/edit <số> ...`\n\n"
                              "**Chức năng Crypto:**\n"
                              "`/gia <ký hiệu>`\n"
-                             "`/gt <thuật ngữ>` - Giải thích (vd: /gt airdrop là gì)\n\n"
-                             "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract (hỗ trợ EVM & Tron).\n"
+                             "`/gt <thuật ngữ>`\n"
+                             "`/tr <nội dung cần dịch>`\n\n"
+                             "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract.\n"
                              "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`")
             send_telegram_message(chat_id, text=start_message)
-        
         elif cmd in ['/add', '/edit', '/del']:
             success = False; message = ""
-            if cmd == '/add':
-                success, message = add_task(chat_id, " ".join(parts[1:]))
+            if cmd == '/add': success, message = add_task(chat_id, " ".join(parts[1:]))
             elif cmd == '/del':
                 if len(parts) > 1: success, message = delete_task(chat_id, parts[1])
                 else: message = "Cú pháp: `/del <số>`"
             elif cmd == '/edit':
                 if len(parts) < 3: message = "Cú pháp: `/edit <số> DD/MM HH:mm - Tên mới`"
                 else: success, message = edit_task(chat_id, parts[1], " ".join(parts[2:]))
-            
             if success:
                 temp_msg_id = send_telegram_message(chat_id, text=message, reply_to_message_id=msg_id)
                 send_telegram_message(chat_id, text=list_tasks(chat_id))
                 if temp_msg_id: delete_telegram_message(chat_id, temp_msg_id)
-            else:
-                send_telegram_message(chat_id, text=message, reply_to_message_id=msg_id)
-                
+            else: send_telegram_message(chat_id, text=message, reply_to_message_id=msg_id)
         elif cmd == '/list': send_telegram_message(chat_id, text=list_tasks(chat_id), reply_to_message_id=msg_id)
         elif cmd == '/gia':
             if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/gia <ký hiệu>`", reply_to_message_id=msg_id)
@@ -247,11 +261,17 @@ def webhook():
             else:
                 query = " ".join(parts[1:])
                 temp_msg_id = send_telegram_message(chat_id, text="🤔 Đang tìm hiểu, vui lòng chờ...", reply_to_message_id=msg_id)
+                if temp_msg_id: edit_telegram_message(chat_id, temp_msg_id, text=get_crypto_explanation(query))
+        elif cmd == '/tr':
+            if len(parts) < 2:
+                send_telegram_message(chat_id, text="Cú pháp: `/tr <văn bản tiếng Anh>`", reply_to_message_id=msg_id)
+            else:
+                text_to_translate = " ".join(parts[1:])
+                temp_msg_id = send_telegram_message(chat_id, text="⏳ Đang dịch, vui lòng chờ...", reply_to_message_id=msg_id)
                 if temp_msg_id:
-                    explanation = get_crypto_explanation(query)
-                    edit_telegram_message(chat_id, temp_msg_id, text=explanation)
+                    translation = translate_crypto_text(text_to_translate)
+                    edit_telegram_message(chat_id, temp_msg_id, text=translation)
         return jsonify(success=True)
-        
     if len(parts) == 1 and is_crypto_address(parts[0]):
         send_telegram_message(chat_id, text=find_token_across_networks(parts[0]), reply_to_message_id=msg_id, disable_web_page_preview=True)
     else:
