@@ -109,7 +109,7 @@ def get_crypto_explanation(query: str) -> str:
     if not GOOGLE_API_KEY: return "❌ Lỗi cấu hình: Thiếu `GOOGLE_API_KEY`."
     try:
         model = genai.GenerativeModel('gemini-2.5-pro')
-        full_prompt = (f"Bạn là một trợ lý chuyên gia về tiền điện tử. Hãy trả lời câu hỏi sau một cách ngắn gọn, súc tích, và dễ hiểu bằng tiếng Việt cho người mới bắt đầu. Tập trung vào các khía cạnh quan trọng nhất.\n\nCâu hỏi: {query}")
+        full_prompt = (f"Bạn là một trợ lý chuyên gia về tiền điện tử. Hãy trả lời câu hỏi sau một cách ngắn gọn, súc tích, và dễ hiểu bằng tiếng Việt cho người mới bắt đầu. Tập trung vào các khía cạnh quan trọng nhất. Trả lời luôn mà không cần nói gì thêm.\n\nCâu hỏi: {query}")
         response = model.generate_content(full_prompt)
         if response.parts: return response.text
         else: return "❌ Không thể tạo câu trả lời cho câu hỏi này."
@@ -312,7 +312,7 @@ def cron_webhook():
                 # (để tránh trường hợp cron job chạy sát nhau)
                 if not last_reminded_ts or (datetime.now().timestamp() - float(last_reminded_ts)) > 240:
                     minutes_left = int(time_until_due.total_seconds() / 60)
-                    reminder_text = f"‼️ *NHẮC NHỞ @all* ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
+                    reminder_text = f"‼️ *NHẮC NHỞ * ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
                     sent_message_id = send_telegram_message(chat_id, text=reminder_text)
                     if sent_message_id:
                         pin_telegram_message(chat_id, sent_message_id)
