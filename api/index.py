@@ -266,7 +266,7 @@ def webhook():
             if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/gt <câu hỏi>`", reply_to_message_id=msg_id)
             else:
                 query = " ".join(parts[1:])
-                temp_msg_id = send_telegram_message(chat_id, text="🤔 Đang tìm hiểu, vui lòng chờ...", reply_to_message_id=msg_id)
+                temp_msg_id = send_telegram_message(chat_id, text="🤔 Đang mò, chờ chút fen...", reply_to_message_id=msg_id)
                 if temp_msg_id: edit_telegram_message(chat_id, temp_msg_id, text=get_crypto_explanation(query))
         elif cmd == '/calc':
             send_telegram_message(chat_id, text=calculate_value(parts), reply_to_message_id=msg_id)
