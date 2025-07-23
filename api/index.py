@@ -108,7 +108,7 @@ def get_price_by_symbol(symbol: str) -> float | None:
 def get_crypto_explanation(query: str) -> str:
     if not GOOGLE_API_KEY: return "❌ Lỗi cấu hình: Thiếu `GOOGLE_API_KEY`."
     try:
-        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+        model = genai.GenerativeModel('gemini-2.5-pro')
         full_prompt = (f"Bạn là một trợ lý chuyên gia về tiền điện tử. Hãy trả lời câu hỏi sau một cách ngắn gọn, súc tích, và dễ hiểu bằng tiếng Việt cho người mới bắt đầu. Tập trung vào các khía cạnh quan trọng nhất.\n\nCâu hỏi: {query}")
         response = model.generate_content(full_prompt)
         if response.parts: return response.text
@@ -128,8 +128,15 @@ def calculate_value(parts: list) -> str:
 def translate_crypto_text(text_to_translate: str) -> str:
     if not GOOGLE_API_KEY: return "❌ Lỗi cấu hình: Thiếu `GOOGLE_API_KEY`."
     try:
-        model = genai.GenerativeModel('gemini-1.5-pro-latest')
-        prompt = (f"Act as an expert translator specializing in finance and cryptocurrency. Your task is to translate the following English text into Vietnamese. Use accurate and natural-sounding financial/crypto jargon appropriate for a savvy investment community. Preserve the original nuance and meaning. Only provide the final Vietnamese translation, without any additional explanation or preamble.\n\nEnglish text to translate:\n\"\"\"{text_to_translate}\"\"\"")
+        model = genai.GenerativeModel('gemini-2.5-pro')
+        prompt = (
+            "Act as an expert translator specializing in finance and cryptocurrency. "
+            "Your task is to translate the following text into Vietnamese. "
+            "Use accurate and natural-sounding financial/crypto jargon appropriate for a savvy investment community. "
+            "Preserve the original nuance and meaning. Only provide the final Vietnamese translation, without any additional explanation or preamble.\n\n"
+            "Text to translate:\n"
+            f"\"\"\"{text_to_translate}\"\"\""
+        )
         response = model.generate_content(prompt)
         if response.parts: return response.text
         else: return "❌ Không thể dịch văn bản này."
@@ -222,9 +229,7 @@ def webhook():
     text = data["message"]["text"].strip(); parts = text.split(); cmd = parts[0].lower()
     if cmd.startswith('/'):
         if cmd == "/start":
-            start_message = ("Chào mừng! Bot đã sẵn sàng.\n\n"
-                             "*Bot sẽ liên tục PIN và THÔNG BÁO nhắc nhở trong vòng 30 phút trước khi công việc đến hạn.*\n"
-                             "*(Lưu ý: Bot cần có quyền Admin để Pin tin nhắn)*\n\n"
+            start_message = ("Gòi, cần gì fen?\n\n"
                              "**Chức năng Lịch hẹn:**\n"
                              "`/add DD/MM HH:mm - Tên`\n"
                              "`/list`, `/del <số>`, `/edit <số> ...`\n\n"
@@ -232,8 +237,8 @@ def webhook():
                              "`/gia <ký hiệu>`\n"
                              "`/calc <ký hiệu> <số lượng>`\n"
                              "`/gt <thuật ngữ>`\n"
-                             "`/tr <văn bản tiếng Anh>`\n\n"
-                             "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract (hỗ trợ EVM & Tron).\n"
+                             "`/tr <nội dung>`\n\n"
+                             "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract.\n"
                              "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`")
             send_telegram_message(chat_id, text=start_message)
         elif cmd in ['/add', '/edit', '/del']:
@@ -266,7 +271,7 @@ def webhook():
         elif cmd == '/calc':
             send_telegram_message(chat_id, text=calculate_value(parts), reply_to_message_id=msg_id)
         elif cmd == '/tr':
-            if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/tr <văn bản tiếng Anh>`", reply_to_message_id=msg_id)
+            if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/tr <nội dung>`", reply_to_message_id=msg_id)
             else:
                 text_to_translate = " ".join(parts[1:])
                 temp_msg_id = send_telegram_message(chat_id, text="⏳ Đang dịch...", reply_to_message_id=msg_id)
