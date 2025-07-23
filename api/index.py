@@ -122,56 +122,57 @@ def calculate_value(parts: list) -> str:
     if price is None: return f"❌ Không tìm thấy giá cho ký hiệu `{symbol}`."
     total_value = price * amount
     return f"*{symbol.upper()}*: `${price:,.2f}` x {amount_str} = *${total_value:,.2f}*"
-
+def translate_crypto_text(text_to_translate: str) -> str:
+    if not GOOGLE_API_KEY: return "❌ Lỗi cấu hình: Thiếu `GOOGLE_API_KEY`."
+    try:
+        model = genai.GenerativeModel('gemini-2.5-pro')
+        prompt = (
+            "Act as an expert translator specializing in finance and cryptocurrency. "
+            "Your task is to translate the following text into Vietnamese. "
+            "Use accurate and natural-sounding financial/crypto jargon appropriate for a savvy investment community. "
+            "Preserve the original nuance and meaning. Only provide the final Vietnamese translation, without any additional explanation or preamble.\n\n"
+            "Text to translate:\n"
+            f"\"\"\"{text_to_translate}\"\"\""
+        )
+        response = model.generate_content(prompt)
+        if response.parts: return response.text
+        else: return "❌ Không thể dịch văn bản này."
+    except Exception as e:
+        print(f"Google Gemini API Error (Translation): {e}")
+        return f"❌ Đã xảy ra lỗi khi kết nối với dịch vụ dịch thuật."
 def get_futures_data(symbol: str) -> str:
-    """Lấy, so sánh và tổng hợp dữ liệu Volume và Open Interest từ CoinGecko."""
     if not kv: return "Lỗi: Chức năng /vol không khả dụng do không kết nối được DB."
-    
-    url = "https://api.coingecko.com/api/v3/derivatives/exchanges"
-    params = {'include_tickers': 'unexpired'}
+    url = "https://api.coingecko.com/api/v3/derivatives/exchanges"; params = {'include_tickers': 'unexpired'}
     try:
         res = requests.get(url, params=params, timeout=20)
         if res.status_code != 200: return f"❌ Lỗi khi gọi API CoinGecko (Code: {res.status_code})."
-        
         exchanges = res.json()
         total_volume_24h = 0.0; total_open_interest = 0.0; found = False
-        
         for exchange in exchanges:
             for ticker in exchange.get('tickers', []):
                 if ticker.get('contract_type') == 'perpetual' and symbol.upper() in ticker.get('symbol', ''):
                     found = True
                     total_volume_24h += ticker.get('converted_volume', {}).get('usd', 0)
                     total_open_interest += ticker.get('open_interest', {}).get('usd', 0)
-        
         if not found: return f"❌ Không tìm thấy dữ liệu Futures cho *{symbol.upper()}*."
-
-        redis_key = f"futures_snapshot:{symbol.lower()}"
-        previous_data_json = kv.get(redis_key)
+        redis_key = f"futures_snapshot:{symbol.lower()}"; previous_data_json = kv.get(redis_key)
         previous_data = json.loads(previous_data_json) if previous_data_json else None
-        
         current_snapshot = {"timestamp": datetime.now().isoformat(), "volume": total_volume_24h, "oi": total_open_interest}
         kv.set(redis_key, json.dumps(current_snapshot))
-        
         result_string = (f"📊 *Dữ liệu Futures cho {symbol.upper()}:*\n\n"
                          f"📈 *Tổng Volume (24h):* `${total_volume_24h:,.2f}`\n"
                          f"📉 *Tổng Open Interest:* `${total_open_interest:,.2f}`")
-
         if previous_data:
             prev_vol = previous_data.get('volume', 0); prev_oi = previous_data.get('oi', 0)
-            
             try: vol_change_pct = ((total_volume_24h - prev_vol) / prev_vol) * 100 if prev_vol > 0 else 0
             except ZeroDivisionError: vol_change_pct = 0
             try: oi_change_pct = ((total_open_interest - prev_oi) / prev_oi) * 100 if prev_oi > 0 else 0
             except ZeroDivisionError: oi_change_pct = 0
-            
-            vol_emoji = '📈' if vol_change_pct >= 0 else '📉'
-            oi_emoji = '📈' if oi_change_pct >= 0 else '📉'
-
+            vol_emoji = '📈' if vol_change_pct >= 0 else '📉'; oi_emoji = '📈' if oi_change_pct >= 0 else '📉'
             change_string = (f"\n\n*So với lần check trước:*\n"
                              f"{vol_emoji} Volume: `{vol_change_pct:+.2f}%`\n"
                              f"{oi_emoji} Open Interest: `{oi_change_pct:+.2f}%`")
             result_string += change_string
-
         return result_string
     except requests.RequestException as e:
         print(f"Request exception for Coingecko Derivatives: {e}")
@@ -306,7 +307,7 @@ def webhook():
         elif cmd == '/calc':
             send_telegram_message(chat_id, text=calculate_value(parts), reply_to_message_id=msg_id)
         elif cmd == '/tr':
-            if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/tr <nội dung cần dịch>`", reply_to_message_id=msg_id)
+            if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/tr <nội dung cần dịch`", reply_to_message_id=msg_id)
             else:
                 text_to_translate = " ".join(parts[1:])
                 temp_msg_id = send_telegram_message(chat_id, text="⏳ Đang dịch...", reply_to_message_id=msg_id)
@@ -347,7 +348,7 @@ def cron_webhook():
                 time_until_due = task_time - now
                 if timedelta(seconds=1) < time_until_due <= timedelta(minutes=REMINDER_THRESHOLD_MINUTES):
                     minutes_left = int(time_until_due.total_seconds() / 60)
-                    reminder_text = f"‼️ *NHẮC NHỞ * ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
+                    reminder_text = f"‼️ *NHẮC NHỞ @all* ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
                     sent_message_id = send_telegram_message(chat_id, text=reminder_text)
                     if sent_message_id: pin_telegram_message(chat_id, sent_message_id)
                     task['reminded'] = True; tasks_changed = True; reminders_sent += 1
