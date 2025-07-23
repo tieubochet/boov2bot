@@ -36,7 +36,7 @@ try:
 except Exception as e:
     print(f"FATAL: Could not connect to Redis. Error: {e}"); kv = None
 
-# --- LOGIC QUẢN LÝ CÔNG VIỆC (Không thay đổi) ---
+# --- LOGIC QUẢN LÝ CÔNG VIỆC (Đã cập nhật return values) ---
 def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | None]:
     try:
         time_part, name_part = task_string.split(' - ', 1)
@@ -46,32 +46,35 @@ def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | Non
         dt_naive = datetime.strptime(time_part.strip(), '%d/%m %H:%M')
         return now.replace(month=dt_naive.month, day=dt_naive.day, hour=dt_naive.hour, minute=dt_naive.minute, second=0, microsecond=0), name_part
     except ValueError: return None, None
-def add_task(chat_id, task_string: str) -> str:
-    if not kv: return "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
+
+def add_task(chat_id, task_string: str) -> tuple[bool, str]:
+    if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
     task_dt, name_part = parse_task_from_string(task_string)
-    if not task_dt or not name_part: return "❌ Cú pháp sai. Dùng: `DD/MM HH:mm - Tên công việc`."
-    if task_dt < datetime.now(TIMEZONE): return "❌ Không thể đặt lịch cho quá khứ."
+    if not task_dt or not name_part: return False, "❌ Cú pháp sai. Dùng: `DD/MM HH:mm - Tên công việc`."
+    if task_dt < datetime.now(TIMEZONE): return False, "❌ Không thể đặt lịch cho quá khứ."
     tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
     tasks.append({"time_iso": task_dt.isoformat(), "name": name_part, "reminded": False})
     tasks.sort(key=lambda x: x['time_iso'])
     kv.set(f"tasks:{chat_id}", json.dumps(tasks))
-    return f"✅ Đã thêm lịch: *{name_part}* lúc *{task_dt.strftime('%H:%M %d/%m/%Y')}*."
-def edit_task(chat_id, index_str: str, new_task_string: str) -> str:
-    if not kv: return "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
+    return True, f"✅ Đã thêm lịch: *{name_part}*."
+
+def edit_task(chat_id, index_str: str, new_task_string: str) -> tuple[bool, str]:
+    if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
     try: task_index = int(index_str) - 1; assert task_index >= 0
-    except (ValueError, AssertionError): return "❌ Số thứ tự không hợp lệ."
+    except (ValueError, AssertionError): return False, "❌ Số thứ tự không hợp lệ."
     new_task_dt, new_name_part = parse_task_from_string(new_task_string)
-    if not new_task_dt or not new_name_part: return "❌ Cú pháp công việc mới không hợp lệ. Dùng: `DD/MM HH:mm - Tên công việc`."
+    if not new_task_dt or not new_name_part: return False, "❌ Cú pháp công việc mới không hợp lệ. Dùng: `DD/MM HH:mm - Tên công việc`."
     user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
     active_tasks = [t for t in user_tasks if datetime.fromisoformat(t['time_iso']) > datetime.now(TIMEZONE)]
-    if task_index >= len(active_tasks): return "❌ Số thứ tự không hợp lệ."
+    if task_index >= len(active_tasks): return False, "❌ Số thứ tự không hợp lệ."
     task_to_edit_iso = active_tasks[task_index]['time_iso']
     for task in user_tasks:
         if task['time_iso'] == task_to_edit_iso:
             task['time_iso'] = new_task_dt.isoformat(); task['name'] = new_name_part; task['reminded'] = False; break
     user_tasks.sort(key=lambda x: x['time_iso'])
     kv.set(f"tasks:{chat_id}", json.dumps(user_tasks))
-    return f"✅ Đã sửa công việc số *{task_index + 1}* thành: *{new_name_part}*."
+    return True, f"✅ Đã sửa công việc số *{task_index + 1}*."
+
 def list_tasks(chat_id) -> str:
     if not kv: return "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
     user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
@@ -82,17 +85,18 @@ def list_tasks(chat_id) -> str:
     for i, task in enumerate(active_tasks):
         result_lines.append(f"*{i+1}.* `{datetime.fromisoformat(task['time_iso']).strftime('%H:%M %d/%m')}` - {task['name']}")
     return "\n".join(result_lines)
-def delete_task(chat_id, task_index_str: str) -> str:
-    if not kv: return "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
+
+def delete_task(chat_id, task_index_str: str) -> tuple[bool, str]:
+    if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
     try: task_index = int(task_index_str) - 1; assert task_index >= 0
-    except (ValueError, AssertionError): return "❌ Số thứ tự không hợp lệ."
+    except (ValueError, AssertionError): return False, "❌ Số thứ tự không hợp lệ."
     user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
     active_tasks = [t for t in user_tasks if datetime.fromisoformat(t['time_iso']) > datetime.now(TIMEZONE)]
-    if task_index >= len(active_tasks): return "❌ Số thứ tự không hợp lệ."
+    if task_index >= len(active_tasks): return False, "❌ Số thứ tự không hợp lệ."
     task_to_delete = active_tasks.pop(task_index)
     updated_tasks = [t for t in user_tasks if t['time_iso'] != task_to_delete['time_iso']]
     kv.set(f"tasks:{chat_id}", json.dumps(updated_tasks))
-    return f"✅ Đã xóa lịch hẹn: *{task_to_delete['name']}*"
+    return True, f"✅ Đã xóa lịch hẹn: *{task_to_delete['name']}*"
 
 # --- LOGIC CRYPTO & TIỆN ÍCH BOT (Không thay đổi) ---
 def get_price_by_symbol(symbol: str) -> float | None:
@@ -205,32 +209,33 @@ def webhook():
                              "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`")
             send_telegram_message(chat_id, text=start_message)
         
-        elif cmd == '/add':
-            confirmation_message = add_task(chat_id, " ".join(parts[1:]))
-            send_telegram_message(chat_id, text=confirmation_message, reply_to_message_id=msg_id)
-            if confirmation_message.startswith("✅"):
-                send_telegram_message(chat_id, text=list_tasks(chat_id))
-                
+        elif cmd in ['/add', '/edit', '/del']:
+            final_message = ""
+            if cmd == '/add':
+                success, message = add_task(chat_id, " ".join(parts[1:]))
+                if success: final_message = f"{message}\n\n---\n\n{list_tasks(chat_id)}"
+                else: final_message = message
+            
+            elif cmd == '/del':
+                if len(parts) > 1:
+                    success, message = delete_task(chat_id, parts[1])
+                    if success: final_message = f"{message}\n\n---\n\n{list_tasks(chat_id)}"
+                    else: final_message = message
+                else:
+                    final_message = "Cú pháp: `/del <số>`"
+
+            elif cmd == '/edit':
+                if len(parts) < 3:
+                    final_message = "Cú pháp: `/edit <số> DD/MM HH:mm - Tên mới`"
+                else:
+                    success, message = edit_task(chat_id, parts[1], " ".join(parts[2:]))
+                    if success: final_message = f"{message}\n\n---\n\n{list_tasks(chat_id)}"
+                    else: final_message = message
+            
+            send_telegram_message(chat_id, text=final_message, reply_to_message_id=msg_id)
+
         elif cmd == '/list': send_telegram_message(chat_id, text=list_tasks(chat_id), reply_to_message_id=msg_id)
         
-        elif cmd == '/del':
-            if len(parts) > 1:
-                confirmation_message = delete_task(chat_id, parts[1])
-                send_telegram_message(chat_id, text=confirmation_message, reply_to_message_id=msg_id)
-                if confirmation_message.startswith("✅"):
-                    send_telegram_message(chat_id, text=list_tasks(chat_id))
-            else:
-                send_telegram_message(chat_id, text="Cú pháp: `/del <số>`", reply_to_message_id=msg_id)
-                
-        elif cmd == '/edit':
-            if len(parts) < 3:
-                send_telegram_message(chat_id, text="Cú pháp: `/edit <số> DD/MM HH:mm - Tên mới`", reply_to_message_id=msg_id)
-            else:
-                confirmation_message = edit_task(chat_id, parts[1], " ".join(parts[2:]))
-                send_telegram_message(chat_id, text=confirmation_message, reply_to_message_id=msg_id)
-                if confirmation_message.startswith("✅"):
-                    send_telegram_message(chat_id, text=list_tasks(chat_id))
-
         elif cmd == '/gia':
             if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/gia <ký hiệu>`", reply_to_message_id=msg_id)
             else:
@@ -275,7 +280,7 @@ def cron_webhook():
                 time_until_due = task_time - now
                 if timedelta(seconds=1) < time_until_due <= timedelta(minutes=REMINDER_THRESHOLD_MINUTES):
                     minutes_left = int(time_until_due.total_seconds() / 60)
-                    reminder_text = f"‼️ *NHẮC NHỞ @all* ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
+                    reminder_text = f"‼️ *NHẮC NHỞ * ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
                     sent_message_id = send_telegram_message(chat_id, text=reminder_text)
                     if sent_message_id: pin_telegram_message(chat_id, sent_message_id)
                     task['reminded'] = True; tasks_changed = True; reminders_sent += 1
