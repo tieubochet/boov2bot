@@ -119,7 +119,7 @@ def translate_crypto_text(text_to_translate: str) -> str:
     if not GOOGLE_API_KEY:
         return "❌ Lỗi cấu hình: Thiếu `GOOGLE_API_KEY`."
     try:
-        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+        model = genai.GenerativeModel('gemini-2.5-pro')
         # Prompt chuyên biệt để AI đóng vai trò thông dịch viên
         prompt = (
             "Act as an expert translator specializing in finance and cryptocurrency. "
