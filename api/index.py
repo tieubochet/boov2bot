@@ -36,7 +36,7 @@ try:
 except Exception as e:
     print(f"FATAL: Could not connect to Redis. Error: {e}"); kv = None
 
-# --- LOGIC QUẢN LÝ CÔNG VIỆC (Đã cập nhật return values) ---
+# --- LOGIC QUẢN LÝ CÔNG VIỆC (Cập nhật return values) ---
 def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | None]:
     try:
         time_part, name_part = task_string.split(' - ', 1)
@@ -98,7 +98,7 @@ def delete_task(chat_id, task_index_str: str) -> tuple[bool, str]:
     kv.set(f"tasks:{chat_id}", json.dumps(updated_tasks))
     return True, f"✅ Đã xóa lịch hẹn: *{task_to_delete['name']}*"
 
-# --- LOGIC CRYPTO & TIỆN ÍCH BOT (Không thay đổi) ---
+# --- LOGIC CRYPTO & TIỆN ÍCH BOT ---
 def get_price_by_symbol(symbol: str) -> float | None:
     coin_id = SYMBOL_TO_ID_MAP.get(symbol.lower(), symbol.lower())
     url = "https://api.coingecko.com/api/v3/simple/price"; params = {'ids': coin_id, 'vs_currencies': 'usd'}
@@ -144,6 +144,12 @@ def answer_callback_query(cb_id):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
     try: requests.post(url, json={'callback_query_id': cb_id}, timeout=5)
     except requests.RequestException as e: print(f"Error answering callback: {e}")
+def delete_telegram_message(chat_id, message_id):
+    """Xóa một tin nhắn."""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
+    payload = {'chat_id': chat_id, 'message_id': message_id}
+    try: requests.post(url, json=payload, timeout=5)
+    except requests.RequestException as e: print(f"Error deleting message: {e}")
 def find_token_across_networks(address: str) -> str:
     for network in AUTO_SEARCH_NETWORKS:
         url = f"https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{address}?include=top_pools"
@@ -198,54 +204,46 @@ def webhook():
     text = data["message"]["text"].strip(); parts = text.split(); cmd = parts[0].lower()
     if cmd.startswith('/'):
         if cmd == "/start":
-            start_message = ("Gòi, cần gì fen?\n\n"
+            start_message = ("Chào mừng! Bot đã sẵn sàng.\n\n"
+                             "*Bot sẽ tự động PIN và THÔNG BÁO nhắc nhở cho cả nhóm.*\n"
+                             "*(Lưu ý: Bot cần có quyền Admin để Pin tin nhắn)*\n\n"
                              "**Chức năng Lịch hẹn:**\n"
                              "`/add DD/MM HH:mm - Tên`\n"
                              "`/list`, `/del <số>`, `/edit <số> ...`\n\n"
                              "**Chức năng Crypto:**\n"
                              "`/gia <ký hiệu>`\n"
                              "`/gt <thuật ngữ>` - Giải thích (vd: /gt airdrop là gì)\n\n"
-                             "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract.\n"
+                             "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract (hỗ trợ EVM & Tron).\n"
                              "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`")
             send_telegram_message(chat_id, text=start_message)
         
         elif cmd in ['/add', '/edit', '/del']:
-            final_message = ""
+            success = False; message = ""
             if cmd == '/add':
                 success, message = add_task(chat_id, " ".join(parts[1:]))
-                if success: final_message = f"{message}\n\n---\n\n{list_tasks(chat_id)}"
-                else: final_message = message
-            
             elif cmd == '/del':
-                if len(parts) > 1:
-                    success, message = delete_task(chat_id, parts[1])
-                    if success: final_message = f"{message}\n\n---\n\n{list_tasks(chat_id)}"
-                    else: final_message = message
-                else:
-                    final_message = "Cú pháp: `/del <số>`"
-
+                if len(parts) > 1: success, message = delete_task(chat_id, parts[1])
+                else: message = "Cú pháp: `/del <số>`"
             elif cmd == '/edit':
-                if len(parts) < 3:
-                    final_message = "Cú pháp: `/edit <số> DD/MM HH:mm - Tên mới`"
-                else:
-                    success, message = edit_task(chat_id, parts[1], " ".join(parts[2:]))
-                    if success: final_message = f"{message}\n\n---\n\n{list_tasks(chat_id)}"
-                    else: final_message = message
+                if len(parts) < 3: message = "Cú pháp: `/edit <số> DD/MM HH:mm - Tên mới`"
+                else: success, message = edit_task(chat_id, parts[1], " ".join(parts[2:]))
             
-            send_telegram_message(chat_id, text=final_message, reply_to_message_id=msg_id)
-
+            if success:
+                temp_msg_id = send_telegram_message(chat_id, text=message, reply_to_message_id=msg_id)
+                send_telegram_message(chat_id, text=list_tasks(chat_id))
+                if temp_msg_id: delete_telegram_message(chat_id, temp_msg_id)
+            else:
+                send_telegram_message(chat_id, text=message, reply_to_message_id=msg_id)
+                
         elif cmd == '/list': send_telegram_message(chat_id, text=list_tasks(chat_id), reply_to_message_id=msg_id)
-        
         elif cmd == '/gia':
             if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/gia <ký hiệu>`", reply_to_message_id=msg_id)
             else:
                 price = get_price_by_symbol(parts[1])
                 if price: send_telegram_message(chat_id, text=f"Giá của *{parts[1].upper()}* là: `${price:,.4f}`", reply_to_message_id=msg_id)
                 else: send_telegram_message(chat_id, text=f"❌ Không tìm thấy giá cho `{parts[1]}`.", reply_to_message_id=msg_id)
-                
         elif cmd == '/gt':
-            if len(parts) < 2:
-                send_telegram_message(chat_id, text="Cú pháp: `/gt <câu hỏi>`", reply_to_message_id=msg_id)
+            if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/gt <câu hỏi>`", reply_to_message_id=msg_id)
             else:
                 query = " ".join(parts[1:])
                 temp_msg_id = send_telegram_message(chat_id, text="🤔 Đang tìm hiểu, vui lòng chờ...", reply_to_message_id=msg_id)
@@ -280,7 +278,7 @@ def cron_webhook():
                 time_until_due = task_time - now
                 if timedelta(seconds=1) < time_until_due <= timedelta(minutes=REMINDER_THRESHOLD_MINUTES):
                     minutes_left = int(time_until_due.total_seconds() / 60)
-                    reminder_text = f"‼️ *NHẮC NHỞ * ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
+                    reminder_text = f"‼️ *NHẮC NHỞ @all* ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
                     sent_message_id = send_telegram_message(chat_id, text=reminder_text)
                     if sent_message_id: pin_telegram_message(chat_id, sent_message_id)
                     task['reminded'] = True; tasks_changed = True; reminders_sent += 1
