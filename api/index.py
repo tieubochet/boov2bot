@@ -105,7 +105,7 @@ def get_price_by_symbol(symbol: str) -> float | None:
 def get_crypto_explanation(query: str) -> str:
     if not GOOGLE_API_KEY: return "❌ Lỗi cấu hình: Thiếu `GOOGLE_API_KEY`."
     try:
-        model = genai.GenerativeModel('gemini-2.5-pro')
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
         full_prompt = (f"Bạn là một trợ lý chuyên gia về tiền điện tử. Hãy trả lời câu hỏi sau một cách ngắn gọn, súc tích, và dễ hiểu bằng tiếng Việt cho người mới bắt đầu. Tập trung vào các khía cạnh quan trọng nhất.\n\nCâu hỏi: {query}")
         response = model.generate_content(full_prompt)
         if response.parts: return response.text
@@ -122,46 +122,40 @@ def calculate_value(parts: list) -> str:
     if price is None: return f"❌ Không tìm thấy giá cho ký hiệu `{symbol}`."
     total_value = price * amount
     return f"*{symbol.upper()}*: `${price:,.2f}` x {amount_str} = *${total_value:,.2f}*"
-def translate_crypto_text(text_to_translate: str) -> str:
-    if not GOOGLE_API_KEY: return "❌ Lỗi cấu hình: Thiếu `GOOGLE_API_KEY`."
-    try:
-        model = genai.GenerativeModel('gemini-2.5-pro')
-        prompt = (
-            "Act as an expert translator specializing in finance and cryptocurrency. "
-            "Your task is to translate the following text into Vietnamese. "
-            "Use accurate and natural-sounding financial/crypto jargon appropriate for a savvy investment community. "
-            "Preserve the original nuance and meaning. Only provide the final Vietnamese translation, without any additional explanation or preamble.\n\n"
-            "Text to translate:\n"
-            f"\"\"\"{text_to_translate}\"\"\""
-        )
-        response = model.generate_content(prompt)
-        if response.parts: return response.text
-        else: return "❌ Không thể dịch văn bản này."
-    except Exception as e:
-        print(f"Google Gemini API Error (Translation): {e}")
-        return f"❌ Đã xảy ra lỗi khi kết nối với dịch vụ dịch thuật."
+
+### <<< THAY ĐỔI: Logic cho /vol được sửa lỗi và cải tiến ###
 def get_futures_data(symbol: str) -> str:
     if not kv: return "Lỗi: Chức năng /vol không khả dụng do không kết nối được DB."
-    url = "https://api.coingecko.com/api/v3/derivatives/exchanges"; params = {'include_tickers': 'unexpired'}
+    url = "https://api.coingecko.com/api/v3/derivatives/exchanges"
+    params = {'include_tickers': 'unexpired'}
     try:
         res = requests.get(url, params=params, timeout=20)
         if res.status_code != 200: return f"❌ Lỗi khi gọi API CoinGecko (Code: {res.status_code})."
+        
         exchanges = res.json()
         total_volume_24h = 0.0; total_open_interest = 0.0; found = False
+        
         for exchange in exchanges:
             for ticker in exchange.get('tickers', []):
-                if ticker.get('contract_type') == 'perpetual' and symbol.upper() in ticker.get('symbol', ''):
+                # Sửa lỗi: So sánh với trường 'base' thay vì 'symbol' để đảm bảo chính xác
+                if ticker.get('contract_type') == 'perpetual' and ticker.get('base') == symbol.upper():
                     found = True
                     total_volume_24h += ticker.get('converted_volume', {}).get('usd', 0)
                     total_open_interest += ticker.get('open_interest', {}).get('usd', 0)
+        
         if not found: return f"❌ Không tìm thấy dữ liệu Futures cho *{symbol.upper()}*."
-        redis_key = f"futures_snapshot:{symbol.lower()}"; previous_data_json = kv.get(redis_key)
+
+        redis_key = f"futures_snapshot:{symbol.lower()}"
+        previous_data_json = kv.get(redis_key)
         previous_data = json.loads(previous_data_json) if previous_data_json else None
+        
         current_snapshot = {"timestamp": datetime.now().isoformat(), "volume": total_volume_24h, "oi": total_open_interest}
         kv.set(redis_key, json.dumps(current_snapshot))
+        
         result_string = (f"📊 *Dữ liệu Futures cho {symbol.upper()}:*\n\n"
                          f"📈 *Tổng Volume (24h):* `${total_volume_24h:,.2f}`\n"
                          f"📉 *Tổng Open Interest:* `${total_open_interest:,.2f}`")
+
         if previous_data:
             prev_vol = previous_data.get('volume', 0); prev_oi = previous_data.get('oi', 0)
             try: vol_change_pct = ((total_volume_24h - prev_vol) / prev_vol) * 100 if prev_vol > 0 else 0
@@ -264,7 +258,9 @@ def webhook():
     text = data["message"]["text"].strip(); parts = text.split(); cmd = parts[0].lower()
     if cmd.startswith('/'):
         if cmd == "/start":
-            start_message = ("Gòi, cần gì fen?\n\n"
+            start_message = ("Chào mừng! Bot đã sẵn sàng.\n\n"
+                             "*Bot sẽ tự động PIN và THÔNG BÁO nhắc nhở cho cả nhóm.*\n"
+                             "*(Lưu ý: Bot cần có quyền Admin để Pin tin nhắn)*\n\n"
                              "**Chức năng Lịch hẹn:**\n"
                              "`/add DD/MM HH:mm - Tên`\n"
                              "`/list`, `/del <số>`, `/edit <số> ...`\n\n"
@@ -274,7 +270,7 @@ def webhook():
                              "`/vol <ký hiệu>` - Volume & OI Futures\n"
                              "`/gt <thuật ngữ>`\n"
                              "`/tr <văn bản tiếng Anh>`\n\n"
-                             "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract.\n"
+                             "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract (hỗ trợ EVM & Tron).\n"
                              "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`")
             send_telegram_message(chat_id, text=start_message)
         elif cmd in ['/add', '/edit', '/del']:
@@ -307,7 +303,7 @@ def webhook():
         elif cmd == '/calc':
             send_telegram_message(chat_id, text=calculate_value(parts), reply_to_message_id=msg_id)
         elif cmd == '/tr':
-            if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/tr <nội dung cần dịch`", reply_to_message_id=msg_id)
+            if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/tr <văn bản tiếng Anh>`", reply_to_message_id=msg_id)
             else:
                 text_to_translate = " ".join(parts[1:])
                 temp_msg_id = send_telegram_message(chat_id, text="⏳ Đang dịch...", reply_to_message_id=msg_id)
