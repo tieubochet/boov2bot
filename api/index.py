@@ -84,7 +84,7 @@ def list_tasks(chat_id) -> str:
     return "\n".join(result_lines)
 def delete_task(chat_id, task_index_str: str) -> tuple[bool, str]:
     if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
-    try: task_index = int(task_index_str) - 1; assert task_index >= 0
+    try: task_index = int(index_str) - 1; assert task_index >= 0
     except (ValueError, AssertionError): return False, "❌ Số thứ tự không hợp lệ."
     user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
     active_tasks = [t for t in user_tasks if datetime.fromisoformat(t['time_iso']) > datetime.now(TIMEZONE)]
@@ -123,7 +123,7 @@ def calculate_value(parts: list) -> str:
     total_value = price * amount
     return f"*{symbol.upper()}*: `${price:,.2f}` x {amount_str} = *${total_value:,.2f}*"
 
-### <<< THAY ĐỔI: Logic cho /vol được sửa lỗi và cải tiến ###
+### <<< SỬA LỖI & CẢI TIẾN: Logic cho /vol được viết lại hoàn toàn ###
 def get_futures_data(symbol: str) -> str:
     if not kv: return "Lỗi: Chức năng /vol không khả dụng do không kết nối được DB."
     url = "https://api.coingecko.com/api/v3/derivatives/exchanges"
@@ -137,11 +137,16 @@ def get_futures_data(symbol: str) -> str:
         
         for exchange in exchanges:
             for ticker in exchange.get('tickers', []):
-                # Sửa lỗi: So sánh với trường 'base' thay vì 'symbol' để đảm bảo chính xác
-                if ticker.get('contract_type') == 'perpetual' and ticker.get('base') == symbol.upper():
-                    found = True
-                    total_volume_24h += ticker.get('converted_volume', {}).get('usd', 0)
-                    total_open_interest += ticker.get('open_interest', {}).get('usd', 0)
+                # Logic tìm kiếm linh hoạt hơn
+                if ticker.get('contract_type') == 'perpetual':
+                    base_match = ticker.get('base') == symbol.upper()
+                    # startsWith an toàn hơn 'in'
+                    symbol_match = ticker.get('symbol', '').startswith(symbol.upper())
+                    
+                    if base_match or symbol_match:
+                        found = True
+                        total_volume_24h += ticker.get('converted_volume', {}).get('usd', 0)
+                        total_open_interest += ticker.get('open_interest', {}).get('usd', 0)
         
         if not found: return f"❌ Không tìm thấy dữ liệu Futures cho *{symbol.upper()}*."
 
