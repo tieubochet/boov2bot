@@ -36,7 +36,7 @@ try:
 except Exception as e:
     print(f"FATAL: Could not connect to Redis. Error: {e}"); kv = None
 
-# --- LOGIC QUẢN LÝ CÔNG VIỆC (Không thay đổi) ---
+# --- LOGIC QUẢN LÝ CÔNG VIỆC ---
 def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | None]:
     try:
         time_part, name_part = task_string.split(' - ', 1)
@@ -113,14 +113,21 @@ def get_crypto_explanation(query: str) -> str:
     except Exception as e:
         print(f"Google Gemini API Error: {e}")
         return f"❌ Đã xảy ra lỗi khi kết nối với dịch vụ giải thích."
+def calculate_value(parts: list) -> str:
+    if len(parts) != 3: return "Cú pháp: `/calc <ký hiệu> <số lượng>`\nVí dụ: `/calc btc 0.5`"
+    symbol, amount_str = parts[1], parts[2]
+    try: amount = float(amount_str)
+    except ValueError: return f"❌ Số lượng không hợp lệ: `{amount_str}`"
+    price = get_price_by_symbol(symbol)
+    if price is None: return f"❌ Không tìm thấy giá cho ký hiệu `{symbol}`."
+    total_value = price * amount
+    return f"*{symbol.upper()}*: `${price:,.2f}` x {amount_str} = *${total_value:,.2f}*"
 
-### <<< THÊM MỚI: Hàm logic cho /tr ###
+### <<< THÊM LẠI: Hàm logic cho /tr ###
 def translate_crypto_text(text_to_translate: str) -> str:
-    if not GOOGLE_API_KEY:
-        return "❌ Lỗi cấu hình: Thiếu `GOOGLE_API_KEY`."
+    if not GOOGLE_API_KEY: return "❌ Lỗi cấu hình: Thiếu `GOOGLE_API_KEY`."
     try:
         model = genai.GenerativeModel('gemini-2.5-pro')
-        # Prompt chuyên biệt để AI đóng vai trò thông dịch viên
         prompt = (
             "Act as an expert translator specializing in finance and cryptocurrency. "
             "Your task is to translate the following text into Vietnamese. "
@@ -130,10 +137,8 @@ def translate_crypto_text(text_to_translate: str) -> str:
             f"\"\"\"{text_to_translate}\"\"\""
         )
         response = model.generate_content(prompt)
-        if response.parts:
-            return response.text
-        else:
-            return "❌ Không thể dịch văn bản này. Có thể nội dung đã vi phạm chính sách an toàn."
+        if response.parts: return response.text
+        else: return "❌ Không thể dịch văn bản này."
     except Exception as e:
         print(f"Google Gemini API Error (Translation): {e}")
         return f"❌ Đã xảy ra lỗi khi kết nối với dịch vụ dịch thuật."
@@ -165,6 +170,11 @@ def answer_callback_query(cb_id):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
     try: requests.post(url, json={'callback_query_id': cb_id}, timeout=5)
     except requests.RequestException as e: print(f"Error answering callback: {e}")
+def delete_telegram_message(chat_id, message_id):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
+    payload = {'chat_id': chat_id, 'message_id': message_id}
+    try: requests.post(url, json=payload, timeout=5)
+    except requests.RequestException as e: print(f"Error deleting message: {e}")
 def find_token_across_networks(address: str) -> str:
     for network in AUTO_SEARCH_NETWORKS:
         url = f"https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{address}?include=top_pools"
@@ -201,11 +211,6 @@ def process_portfolio_text(message_text: str) -> str | None:
         except requests.RequestException: result_lines.append(f"🔌 Lỗi mạng khi lấy giá cho `{address[:10]}...`")
     if valid_lines_count == 0: return None
     return "\n".join(result_lines) + f"\n--------------------\n*Tổng cộng: *${total_value:,.2f}**"
-def delete_telegram_message(chat_id, message_id):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
-    payload = {'chat_id': chat_id, 'message_id': message_id}
-    try: requests.post(url, json=payload, timeout=5)
-    except requests.RequestException as e: print(f"Error deleting message: {e}")
 
 # --- WEB SERVER (FLASK) ---
 app = Flask(__name__)
@@ -230,6 +235,7 @@ def webhook():
                              "`/list`, `/del <số>`, `/edit <số> ...`\n\n"
                              "**Chức năng Crypto:**\n"
                              "`/gia <ký hiệu>`\n"
+                             "`/calc <ký hiệu> <số lượng>`\n"
                              "`/gt <thuật ngữ>`\n"
                              "`/tr <nội dung cần dịch>`\n\n"
                              "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract.\n"
@@ -262,9 +268,10 @@ def webhook():
                 query = " ".join(parts[1:])
                 temp_msg_id = send_telegram_message(chat_id, text="🤔 Đang tìm hiểu, vui lòng chờ...", reply_to_message_id=msg_id)
                 if temp_msg_id: edit_telegram_message(chat_id, temp_msg_id, text=get_crypto_explanation(query))
+        elif cmd == '/calc':
+            send_telegram_message(chat_id, text=calculate_value(parts), reply_to_message_id=msg_id)
         elif cmd == '/tr':
-            if len(parts) < 2:
-                send_telegram_message(chat_id, text="Cú pháp: `/tr <văn bản tiếng Anh>`", reply_to_message_id=msg_id)
+            if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/tr <văn bản tiếng Anh>`", reply_to_message_id=msg_id)
             else:
                 text_to_translate = " ".join(parts[1:])
                 temp_msg_id = send_telegram_message(chat_id, text="⏳ Đang dịch, vui lòng chờ...", reply_to_message_id=msg_id)
