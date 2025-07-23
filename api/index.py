@@ -52,7 +52,7 @@ def add_task(chat_id, task_string: str) -> tuple[bool, str]:
     if not task_dt or not name_part: return False, "❌ Cú pháp sai. Dùng: `DD/MM HH:mm - Tên công việc`."
     if task_dt < datetime.now(TIMEZONE): return False, "❌ Không thể đặt lịch cho quá khứ."
     tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
-    ### <<< THAY ĐỔI: Không cần cờ 'reminded' nữa ###
+    # Không cần cờ 'reminded' nữa
     tasks.append({"time_iso": task_dt.isoformat(), "name": name_part})
     tasks.sort(key=lambda x: x['time_iso'])
     kv.set(f"tasks:{chat_id}", json.dumps(tasks))
@@ -69,9 +69,7 @@ def edit_task(chat_id, index_str: str, new_task_string: str) -> tuple[bool, str]
     task_to_edit_iso = active_tasks[task_index]['time_iso']
     for task in user_tasks:
         if task['time_iso'] == task_to_edit_iso:
-            task['time_iso'] = new_task_dt.isoformat(); task['name'] = new_name_part
-            ### <<< THAY ĐỔI: Không cần cờ 'reminded' nữa ###
-            break
+            task['time_iso'] = new_task_dt.isoformat(); task['name'] = new_name_part; break
     user_tasks.sort(key=lambda x: x['time_iso'])
     kv.set(f"tasks:{chat_id}", json.dumps(user_tasks))
     return True, f"✅ Đã sửa công việc số *{task_index + 1}*."
@@ -87,7 +85,7 @@ def list_tasks(chat_id) -> str:
     return "\n".join(result_lines)
 def delete_task(chat_id, task_index_str: str) -> tuple[bool, str]:
     if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
-    try: task_index = int(task_index_str) - 1; assert task_index >= 0
+    try: task_index = int(index_str) - 1; assert task_index >= 0
     except (ValueError, AssertionError): return False, "❌ Số thứ tự không hợp lệ."
     user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
     active_tasks = [t for t in user_tasks if datetime.fromisoformat(t['time_iso']) > datetime.now(TIMEZONE)]
@@ -97,7 +95,7 @@ def delete_task(chat_id, task_index_str: str) -> tuple[bool, str]:
     kv.set(f"tasks:{chat_id}", json.dumps(updated_tasks))
     return True, f"✅ Đã xóa lịch hẹn: *{task_to_delete['name']}*"
 
-# --- LOGIC CRYPTO & TIỆN ÍCH BOT ---
+# --- LOGIC CRYPTO & TIỆN ÍCH BOT (Không thay đổi) ---
 def get_price_by_symbol(symbol: str) -> float | None:
     coin_id = SYMBOL_TO_ID_MAP.get(symbol.lower(), symbol.lower())
     url = "https://api.coingecko.com/api/v3/simple/price"; params = {'ids': coin_id, 'vs_currencies': 'usd'}
@@ -210,7 +208,7 @@ def process_portfolio_text(message_text: str) -> str | None:
             else: result_lines.append(f"❌ Không tìm thấy giá cho `{address[:10]}...` trên `{network}`")
         except requests.RequestException: result_lines.append(f"🔌 Lỗi mạng khi lấy giá cho `{address[:10]}...`")
     if valid_lines_count == 0: return None
-    return "\n".join(result_lines) + f"\n--------------------\n*Tổng cộng: *${total_value:,.2f}**"
+    return "\n".join(result_lines) + f"\n--------------------\n*Húp nhẹ: *${total_value:,.2f}**"
 
 # --- WEB SERVER (FLASK) ---
 app = Flask(__name__)
@@ -274,7 +272,7 @@ def webhook():
             if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/tr <nội dung>`", reply_to_message_id=msg_id)
             else:
                 text_to_translate = " ".join(parts[1:])
-                temp_msg_id = send_telegram_message(chat_id, text="⏳ Đang dịch...", reply_to_message_id=msg_id)
+                temp_msg_id = send_telegram_message(chat_id, text="⏳ Đang dịch, đợi tí fen...", reply_to_message_id=msg_id)
                 if temp_msg_id: edit_telegram_message(chat_id, temp_msg_id, text=translate_crypto_text(text_to_translate))
         return jsonify(success=True)
     if len(parts) == 1 and is_crypto_address(parts[0]):
@@ -294,35 +292,40 @@ def cron_webhook():
     if secret != CRON_SECRET: return jsonify(error="Unauthorized"), 403
     print(f"[{datetime.now()}] Running reminder check...")
     reminders_sent = 0
+    tasks_to_keep = {}
+
     for key in kv.scan_iter("tasks:*"):
-        chat_id = key.split(':')[1]; user_tasks = json.loads(kv.get(key) or '[]')
+        chat_id = key.split(':')[1]
+        user_tasks = json.loads(kv.get(key) or '[]')
         now = datetime.now(TIMEZONE)
+        
+        # Lọc ra các công việc chưa hết hạn để lưu lại
+        tasks_to_keep[chat_id] = [task for task in user_tasks if datetime.fromisoformat(task['time_iso']) > now]
+        
         for task in user_tasks:
             task_time = datetime.fromisoformat(task['time_iso'])
             time_until_due = task_time - now
             
-            ### <<< THAY ĐỔI: Logic nhắc nhở lặp lại ###
             if timedelta(seconds=1) < time_until_due <= timedelta(minutes=REMINDER_THRESHOLD_MINUTES):
-                # Để tránh spam, chúng ta chỉ nhắc lại nếu lần nhắc trước đó đã cách đây một khoảng thời gian
-                # Chúng ta sẽ lưu timestamp của lần nhắc cuối cùng vào Redis
                 last_reminded_key = f"last_reminded:{chat_id}:{task['time_iso']}"
-                last_reminded_ts = kv.get(last_reminded_key)
+                last_reminded_ts_str = kv.get(last_reminded_key)
+                last_reminded_ts = float(last_reminded_ts_str) if last_reminded_ts_str else 0
                 
-                # Chỉ nhắc lại nếu chưa từng nhắc, hoặc lần nhắc cuối đã hơn 4 phút trước
-                # (để tránh trường hợp cron job chạy sát nhau)
-                if not last_reminded_ts or (datetime.now().timestamp() - float(last_reminded_ts)) > 240:
+                # Chỉ nhắc lại nếu lần nhắc cuối đã hơn 9 phút trước (an toàn cho cron job 10 phút)
+                if (datetime.now().timestamp() - last_reminded_ts) > 540:
                     minutes_left = int(time_until_due.total_seconds() / 60)
-                    reminder_text = f"‼️ *ANH NHẮC EM * ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
+                    reminder_text = f"‼️ *ANH NHẮC EM* ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
                     sent_message_id = send_telegram_message(chat_id, text=reminder_text)
                     if sent_message_id:
                         pin_telegram_message(chat_id, sent_message_id)
                     
-                    # Cập nhật lại timestamp của lần nhắc cuối
                     kv.set(last_reminded_key, datetime.now().timestamp())
-                    # Đặt thời gian hết hạn cho key này (ví dụ: 1 giờ) để tự động dọn dẹp
-                    kv.expire(last_reminded_key, 3600) 
-                    
+                    kv.expire(last_reminded_key, 3600) # Tự xóa key sau 1 giờ
                     reminders_sent += 1
+
+        # Cập nhật lại danh sách công việc sau khi đã lọc bỏ các task hết hạn
+        if len(tasks_to_keep[chat_id]) < len(user_tasks):
+            kv.set(key, json.dumps(tasks_to_keep[chat_id]))
 
     result = {"status": "success", "reminders_sent": reminders_sent}
     print(result)
