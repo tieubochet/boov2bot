@@ -312,7 +312,7 @@ def cron_webhook():
                 # (để tránh trường hợp cron job chạy sát nhau)
                 if not last_reminded_ts or (datetime.now().timestamp() - float(last_reminded_ts)) > 240:
                     minutes_left = int(time_until_due.total_seconds() / 60)
-                    reminder_text = f"‼️ *NHẮC NHỞ * ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
+                    reminder_text = f"‼️ *ANH NHẮC EM * ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
                     sent_message_id = send_telegram_message(chat_id, text=reminder_text)
                     if sent_message_id:
                         pin_telegram_message(chat_id, sent_message_id)
