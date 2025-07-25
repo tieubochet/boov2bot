@@ -36,6 +36,55 @@ try:
 except Exception as e:
     print(f"FATAL: Could not connect to Redis. Error: {e}"); kv = None
 
+# --- CHECK RANK KAITO ---
+def get_user_rank(username: str) -> str:
+    """Lấy dữ liệu rank từ API, nhóm theo dự án và định dạng kết quả."""
+    url = f"https://star7777.shop/Kaito/GetUserRank?id={username}"
+    try:
+        res = requests.get(url, timeout=15)
+        if res.status_code != 200:
+            return f"❌ Lỗi khi gọi API rank (Code: {res.status_code})."
+        
+        data = res.json()
+        if not data:
+            return f"❌ Không tìm thấy người dùng `{username}`."
+        
+        # --- BẮT ĐẦU LOGIC NHÓM DỮ LIỆU ---
+        
+        # Bước 1: Nhóm dữ liệu theo S_PROJECT_NAME
+        projects = {}
+        for rank_info in data:
+            project_name = rank_info.get('S_PROJECT_NAME', 'N/A')
+            if project_name not in projects:
+                projects[project_name] = []
+            projects[project_name].append(rank_info)
+
+        # Bước 2: Xây dựng chuỗi kết quả từ dữ liệu đã nhóm
+        final_message_parts = [f"🏆 *Rank của {username}*"]
+        
+        for project_name, ranks in projects.items():
+            project_str = f"\n\n- - - - - - - - - -\n\n*{project_name}*"
+            
+            # Lặp qua các rank trong cùng một dự án để lấy thông tin
+            for rank_info in ranks:
+                duration = rank_info.get('S_DURATION', 'N/A')
+                rank = rank_info.get('N_RANK', 'N/A')
+                mindshare = rank_info.get('N_MINDSHARE', 0)
+                mindshare_str = f"{mindshare:.2f}%"
+                
+                # Thêm dòng chi tiết cho mỗi duration
+                project_str += f"\n`{duration}`: *{rank}* - `{mindshare_str}`"
+            
+            final_message_parts.append(project_str)
+            
+        return "".join(final_message_parts)
+
+    except requests.RequestException as e:
+        print(f"Request exception for Rank API: {e}")
+        return "❌ Lỗi mạng khi lấy dữ liệu rank."
+    except (json.JSONDecodeError, IndexError):
+        return f"❌ Dữ liệu trả về từ API không hợp lệ cho người dùng `{username}`."
+# --- END RANK KAITO---
 # --- LOGIC QUẢN LÝ CÔNG VIỆC ---
 def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | None]:
     try:
