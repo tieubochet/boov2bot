@@ -323,6 +323,15 @@ def webhook():
                 text_to_translate = " ".join(parts[1:])
                 temp_msg_id = send_telegram_message(chat_id, text="⏳ Đang dịch, đợi tí fen...", reply_to_message_id=msg_id)
                 if temp_msg_id: edit_telegram_message(chat_id, temp_msg_id, text=translate_crypto_text(text_to_translate))
+        elif cmd == '/rank':
+            if len(parts) < 2:
+                send_telegram_message(chat_id, text="Cú pháp: `/rank <username>`", reply_to_message_id=msg_id)
+            else:
+                username = parts[1]
+                temp_msg_id = send_telegram_message(chat_id, text=f"🏆 Đang tìm rank cho *{username}*...", reply_to_message_id=msg_id)
+                if temp_msg_id:
+                    result = get_user_rank(username)
+                    edit_telegram_message(chat_id, temp_msg_id, text=result)
         return jsonify(success=True)
     if len(parts) == 1 and is_crypto_address(parts[0]):
         send_telegram_message(chat_id, text=find_token_across_networks(parts[0]), reply_to_message_id=msg_id, disable_web_page_preview=True)
