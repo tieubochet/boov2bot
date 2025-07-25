@@ -283,7 +283,7 @@ def webhook():
                              "`/calc <ký hiệu> <số lượng>`\n"
                              "`/gt <thuật ngữ>`\n"
                              "`/tr <nội dung>`\n"
-                             "`/rank <username>`\n\n"
+                             "`/ktrank <username>`\n\n"
                              "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract.\n"
                              "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`")
             send_telegram_message(chat_id, text=start_message)
@@ -322,9 +322,9 @@ def webhook():
                 text_to_translate = " ".join(parts[1:])
                 temp_msg_id = send_telegram_message(chat_id, text="⏳ Đang dịch, đợi tí fen...", reply_to_message_id=msg_id)
                 if temp_msg_id: edit_telegram_message(chat_id, temp_msg_id, text=translate_crypto_text(text_to_translate))
-        elif cmd == '/rank':
+        elif cmd == '/ktrank':
             if len(parts) < 2:
-                send_telegram_message(chat_id, text="Cú pháp: `/rank <username>`", reply_to_message_id=msg_id)
+                send_telegram_message(chat_id, text="Cú pháp: `/ktrank <username>`", reply_to_message_id=msg_id)
             else:
                 username = parts[1]
                 temp_msg_id = send_telegram_message(chat_id, text=f"🏆 Đang tìm rank cho *{username}*...", reply_to_message_id=msg_id)
