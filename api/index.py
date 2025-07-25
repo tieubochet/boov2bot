@@ -69,11 +69,9 @@ def get_user_rank(username: str) -> str:
             for rank_info in ranks:
                 duration = rank_info.get('S_DURATION', 'N/A')
                 rank = rank_info.get('N_RANK', 'N/A')
-                mindshare = rank_info.get('N_MINDSHARE', 0)
-                mindshare_str = f"{mindshare:.2f}%"
                 
                 # Thêm dòng chi tiết cho mỗi duration
-                project_str += f"\n`{duration}`: *{rank}* - `{mindshare_str}`"
+                project_str += f"\n`{duration}`: *{rank}*"
             
             final_message_parts.append(project_str)
             
