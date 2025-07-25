@@ -17,6 +17,7 @@
 - **Portfolio Management (`Send List`):** Calculates the total value of a portfolio with multiple different tokens. Includes a convenient "Refresh" button for instant price updates.
 - **AI Assistant (`/gt`):** Explains crypto terms, concepts, or answers any related questions using the power of the Google Gemini API.
 - **Specialized Translator (`/tr`):** Acts as a financial interpreter, translating English text into Vietnamese using accurate, context-aware terminology.
+- **Kaito Rank Check (`/ktrank`):** Fetches a user's ranking and mindshare information from the Kaito API.
 
 ### 🚀 Architecture
 - **Serverless Optimized:** Designed to run smoothly on platforms like Vercel.
@@ -115,6 +116,7 @@ We'll use [Cron-job](https://cron-job.org/en/) as it's free and easy to set up.
 *   `/calc <symbol> <amount>` - Calculates the USD value of a token amount.
 *   `/gt <question>` - Explains a crypto term or concept.
 *   `/tr <english text>` - Translates text to Vietnamese with financial context.
+*   `/ktrank <username>` - Checks a user's Kaito ranking.
 
 **Automatic:**
 *   **Send a contract address:** The bot will automatically look up token information.
