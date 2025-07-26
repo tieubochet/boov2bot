@@ -221,86 +221,19 @@ def delete_telegram_message(chat_id, message_id):
     try: requests.post(url, json=payload, timeout=5)
     except requests.RequestException as e: print(f"Error deleting message: {e}")
 def find_token_across_networks(address: str) -> str:
-    """
-    Tra cứu thông tin token và các sàn CEX có hợp đồng perpetual bằng CoinGecko API.
-    """
-    # Bản đồ chuyển đổi tên network của chúng ta sang ID platform của CoinGecko
-    network_to_platform_id = {
-        'eth': 'ethereum',
-        'bsc': 'binance-smart-chain',
-        'polygon': 'polygon-pos',
-        'arbitrum': 'arbitrum-one',
-        'base': 'base',
-        'tron': 'tron'
-    }
-
-    # Bước 1: Tìm token ID từ địa chỉ contract và network
-    coin_data = None
-    found_network = None
-    for network_key, platform_id in network_to_platform_id.items():
-        # API của Coingecko phân biệt địa chỉ EVM và Tron
-        if (network_key == 'tron' and not is_tron_address(address)) or \
-           (network_key != 'tron' and not is_evm_address(address)):
-            continue
-
-        url = f"https://api.coingecko.com/api/v3/coins/{platform_id}/contract/{address.lower()}"
+    for network in AUTO_SEARCH_NETWORKS:
+        url = f"https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{address}?include=top_pools"
         try:
-            res = requests.get(url, timeout=10)
+            res = requests.get(url, headers={"accept": "application/json"}, timeout=10)
             if res.status_code == 200:
-                coin_data = res.json()
-                found_network = network_key
-                break # Dừng lại khi đã tìm thấy
-        except requests.RequestException:
-            continue
-            
-    if not coin_data or not coin_data.get('id'):
-        return f"❌ Không tìm thấy token với địa chỉ `{address[:10]}...` trên các mạng được hỗ trợ bởi CoinGecko."
-
-    # Bước 2: Lấy dữ liệu chi tiết và danh sách tickers
-    coin_id = coin_data['id']
-    url_tickers = f"https://api.coingecko.com/api/v3/coins/{coin_id}/tickers"
-    params = {'include_exchange_logo': 'false', 'order': 'volume_desc', 'depth': 'false'}
-    
-    try:
-        res_tickers = requests.get(url_tickers, params=params, timeout=15)
-        if res_tickers.status_code != 200:
-            return f"✅ Tìm thấy token *{coin_data.get('name')}*, nhưng không thể lấy dữ liệu giao dịch."
-            
-        tickers = res_tickers.json().get('tickers', [])
-        
-        # Lọc và tổng hợp các sàn CEX có hợp đồng Perpetual
-        perpetual_exchanges = set()
-        for ticker in tickers:
-            # is_anomaly và is_stale là các cờ báo hiệu dữ liệu không đáng tin cậy
-            if ticker.get('contract_type') == 'perpetual' and not ticker.get('is_anomaly') and not ticker.get('is_stale'):
-                perpetual_exchanges.add(ticker['market']['name'])
-
-        # Lấy thông tin giá và % thay đổi từ ticker đầu tiên (đã sắp xếp theo volume)
-        price = tickers[0].get('converted_last', {}).get('usd', 0) if tickers else 0
-        price_change_24h = coin_data.get('market_data', {}).get('price_change_percentage_24h', 0)
-        emoji = '📈' if price_change_24h >= 0 else '📉'
-
-        # Bước 3: Định dạng kết quả cuối cùng
-        result = (f"✅ *Tìm thấy trên mạng {found_network.upper()}*\n"
-                  f"*{coin_data.get('name')} ({coin_data.get('symbol', '').upper()})*\n\n"
-                  f"Giá: *${price:,.8f}*\n"
-                  f"24h: *{emoji} {price_change_24h:+.2f}%*\n")
-                  
-        if perpetual_exchanges:
-            # Giới hạn hiển thị 5 sàn hàng đầu để tin nhắn không quá dài
-            exchanges_list_str = ", ".join(list(perpetual_exchanges)[:5])
-            result += f"Sàn Futures (CEX): `{exchanges_list_str}`\n"
-        else:
-            result += "Sàn Futures (CEX): `N/A`\n"
-            
-        result += (f"\n🔗 [Xem trên CoinGecko](https://www.coingecko.com/en/coins/{coin_id})\n"
-                   f"`{address}`")
-                   
-        return result
-
-    except requests.RequestException as e:
-        print(f"Error fetching tickers from CoinGecko: {e}")
-        return f"❌ Lỗi mạng khi lấy dữ liệu giao dịch cho *{coin_data.get('name')}*."
+                data = res.json(); token_attr = data.get('data', {}).get('attributes', {})
+                price = float(token_attr.get('price_usd', 0)); change = float(token_attr.get('price_change_percentage', {}).get('h24', 0))
+                return (f"✅ *Tìm thấy trên mạng {network.upper()}*\n"
+                        f"*{token_attr.get('name', 'N/A')} ({token_attr.get('symbol', 'N/A')})*\n\n"
+                        f"Giá: *${price:,.8f}*\n24h: *{'📈' if change >= 0 else '📉'} {change:+.2f}%*\n\n"
+                        f"🔗 [Xem trên GeckoTerminal](https://www.geckoterminal.com/{network}/tokens/{address})\n\n`{address}`")
+        except requests.RequestException: continue
+    return f"❌ Không tìm thấy token với địa chỉ `{address[:10]}...`."
 def process_portfolio_text(message_text: str) -> str | None:
     lines = message_text.strip().split('\n'); total_value, result_lines, valid_lines_count = 0.0, [], 0
     for line in lines:
