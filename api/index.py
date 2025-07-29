@@ -18,7 +18,7 @@ REMINDER_THRESHOLD_MINUTES = 30
 SYMBOL_TO_ID_MAP = {
     'btc': 'bitcoin', 'eth': 'ethereum', 'bnb': 'binancecoin', 'sol': 'solana',
     'xrp': 'ripple', 'doge': 'dogecoin', 'shib': 'shiba-inu', 'degen': 'degen-base',
-    'sui': 'sui', 'dev': 'scout-protocol-token'
+    'sui': 'sui', 'dev': 'scout-protocol-token', 'hype':'hyperliquid'
 }
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
