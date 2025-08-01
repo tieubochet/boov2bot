@@ -132,17 +132,18 @@ def list_tasks(chat_id) -> str:
     for i, task in enumerate(active_tasks):
         result_lines.append(f"*{i+1}.* `{datetime.fromisoformat(task['time_iso']).strftime('%H:%M %d/%m')}` - {task['name']}")
     return "\n".join(result_lines)
-def delete_task(chat_id, task_index_str: str) -> tuple[bool, str]:
-    if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
-    try: task_index = int(index_str) - 1; assert task_index >= 0
-    except (ValueError, AssertionError): return False, "❌ Số thứ tự không hợp lệ."
-    user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
-    active_tasks = [t for t in user_tasks if datetime.fromisoformat(t['time_iso']) > datetime.now(TIMEZONE)]
-    if task_index >= len(active_tasks): return False, "❌ Số thứ tự không hợp lệ."
-    task_to_delete = active_tasks.pop(task_index)
-    updated_tasks = [t for t in user_tasks if t['time_iso'] != task_to_delete['time_iso']]
-    kv.set(f"tasks:{chat_id}", json.dumps(updated_tasks))
-    return True, f"✅ Đã xóa lịch hẹn: *{task_to_delete['name']}*"
+# <<< XÓA BỎ TOÀN BỘ HÀM NÀY >>>
+#def delete_task(chat_id, task_index_str: str) -> tuple[bool, str]:
+#    if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
+#    try: task_index = int(index_str) - 1; assert task_index >= 0
+#    except (ValueError, AssertionError): return False, "❌ Số thứ tự không hợp lệ."
+#    user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
+#    active_tasks = [t for t in user_tasks if datetime.fromisoformat(t['time_iso']) > datetime.now(TIMEZONE)]
+#    if task_index >= len(active_tasks): return False, "❌ Số thứ tự không hợp lệ."
+#    task_to_delete = active_tasks.pop(task_index)
+#    updated_tasks = [t for t in user_tasks if t['time_iso'] != task_to_delete['time_iso']]
+#    kv.set(f"tasks:{chat_id}", json.dumps(updated_tasks))
+#    return True, f"✅ Đã xóa lịch hẹn: *{task_to_delete['name']}*"
 
 # --- LOGIC CRYPTO & TIỆN ÍCH BOT (Không thay đổi) ---
 def get_price_by_symbol(symbol: str) -> float | None:
@@ -279,7 +280,7 @@ def webhook():
             start_message = ("Gòi, cần gì fen?\n\n"
                              "**Chức năng Lịch hẹn:**\n"
                              "`/add DD/MM HH:mm - Tên`\n"
-                             "`/list`, `/del <số>`, `/edit <số> ...`\n\n"
+                             "`/list`, `/edit <số> ...`\n\n"
                              "**Chức năng Crypto:**\n"
                              "`/gia <ký hiệu>`\n"
                              "`/calc <ký hiệu> <số lượng>`\n"
@@ -289,12 +290,12 @@ def webhook():
                              "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract.\n"
                              "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`")
             send_telegram_message(chat_id, text=start_message)
-        elif cmd in ['/add', '/edit', '/del']:
+        elif cmd in ['/add', '/edit']:
             success = False; message = ""
             if cmd == '/add': success, message = add_task(chat_id, " ".join(parts[1:]))
-            elif cmd == '/del':
-                if len(parts) > 1: success, message = delete_task(chat_id, parts[1])
-                else: message = "Cú pháp: `/del <số>`"
+            #elif cmd == '/del':
+            #    if len(parts) > 1: success, message = delete_task(chat_id, parts[1])
+            #    else: message = "Cú pháp: `/del <số>`"
             elif cmd == '/edit':
                 if len(parts) < 3: message = "Cú pháp: `/edit <số> DD/MM HH:mm - Tên mới`"
                 else: success, message = edit_task(chat_id, parts[1], " ".join(parts[2:]))
