@@ -195,9 +195,9 @@ def find_perpetual_markets(symbol: str) -> str:
     """Tìm các sàn CEX và DEX cho phép giao dịch perpetuals của một token."""
     try:
         # Bước 1: Tìm ID chính xác của coin từ symbol
-        search_url = "https://api.coingecko.com/api/v3/search"
-        search_params = {'query': symbol}
-        res_search = requests.get(search_url, params=search_params, timeout=100)
+        search_url = "https://api.coingecko.com/api/v3/search?query=eth"
+        #search_params = {'query': symbol}
+        #res_search = requests.get(search_url, params=search_params, timeout=100)
         if res_search.status_code != 200:
             return f"❌ Không thể tìm kiếm thông tin cho `{symbol}`."
         
