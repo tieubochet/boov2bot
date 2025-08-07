@@ -334,6 +334,39 @@ def webhook():
                 if temp_msg_id:
                     result = get_user_rank(username)
                     edit_telegram_message(chat_id, temp_msg_id, text=result)
+        elif text.startswith("/perp"):
+    parts = text.split()
+    if len(parts) != 2:
+        reply = "❗️Vui lòng dùng cú pháp: `/perp <symbol>` (VD: /perp eth)"
+    else:
+        symbol = parts[1].upper()
+        coinglass_api_key = os.environ.get("COINGLASS_API_KEY")
+
+        try:
+            res = requests.get(
+                f"https://open-api.coinglass.com/public/v2/perpetual/market_exchanges?symbol={symbol}",
+                headers={"coinglassSecret": coinglass_api_key}
+            )
+            data = res.json()
+
+            exchanges = data.get("data", [])
+            if not exchanges:
+                reply = f"❌ Không tìm thấy sàn nào hỗ trợ perpetual cho `{symbol}`"
+            else:
+                reply_lines = [f"💹 Sàn hỗ trợ Long/Short Perpetual cho *{symbol}*:\n"]
+                for ex in exchanges:
+                    name = ex.get("exchangeName", "Unknown")
+                    price = ex.get("price", "N/A")
+                    funding = ex.get("fundingRate", "N/A")
+                    reply_lines.append(f"🏦 *{name}* — Giá: `{price}` — Funding: `{funding}%`")
+
+                reply = "\n".join(reply_lines)
+
+        except Exception as e:
+            reply = f"❌ Đã xảy ra lỗi khi truy vấn dữ liệu: {e}"
+
+    send_message(chat_id, reply, parse_mode="Markdown")
+
         return jsonify(success=True)
     if len(parts) == 1 and is_crypto_address(parts[0]):
         send_telegram_message(chat_id, text=find_token_across_networks(parts[0]), reply_to_message_id=msg_id, disable_web_page_preview=True)
