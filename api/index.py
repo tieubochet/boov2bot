@@ -191,6 +191,68 @@ def translate_crypto_text(text_to_translate: str) -> str:
     except Exception as e:
         print(f"Google Gemini API Error (Translation): {e}")
         return f"❌ Đã xảy ra lỗi khi kết nối với dịch vụ dịch thuật."
+def find_perpetual_markets(symbol: str) -> str:
+    """Tìm các sàn CEX và DEX cho phép giao dịch perpetuals của một token."""
+    try:
+        # Bước 1: Tìm ID chính xác của coin từ symbol
+        search_url = "https://api.coingecko.com/api/v3/search"
+        search_params = {'query': symbol}
+        res_search = requests.get(search_url, params=search_params, timeout=10)
+        if res_search.status_code != 200:
+            return f"❌ Không thể tìm kiếm thông tin cho `{symbol}`."
+        
+        search_results = res_search.json().get('coins', [])
+        if not search_results:
+            return f"❌ Không tìm thấy token nào có ký hiệu `{symbol}` trên CoinGecko."
+        
+        # Lấy kết quả phù hợp nhất (thường là cái đầu tiên)
+        coin_id = search_results[0].get('id')
+        coin_name = search_results[0].get('name')
+
+        # Bước 2: Dùng ID để lấy danh sách tất cả các thị trường (tickers)
+        tickers_url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/tickers"
+        params = {'include_exchange_logo': 'false', 'order': 'volume_desc', 'depth': 'false'}
+        
+        res_tickers = requests.get(tickers_url, params=params, timeout=20)
+        if res_tickers.status_code != 200:
+            return f"✅ Tìm thấy token *{coin_name}*, nhưng không thể lấy dữ liệu giao dịch."
+            
+        tickers = res_tickers.json().get('tickers', [])
+        
+        # Bước 3: Lọc và nhóm các sàn có hợp đồng Perpetual
+        cex_perps = set()
+        dex_perps = set()
+        
+        for ticker in tickers:
+            # is_anomaly và is_stale là các cờ báo hiệu dữ liệu không đáng tin cậy
+            if ticker.get('contract_type') == 'perpetual' and not ticker.get('is_anomaly') and not ticker.get('is_stale'):
+                market_name = ticker['market']['name']
+                # Phân loại sàn CEX/DEX dựa trên trust_score
+                if ticker.get('trust_score'):
+                    cex_perps.add(market_name)
+                else:
+                    dex_perps.add(market_name)
+
+        if not cex_perps and not dex_perps:
+            return f"ℹ️ Không tìm thấy thị trường Perpetual nào cho *{coin_name} ({symbol.upper()})*."
+
+        # Bước 4: Định dạng kết quả
+        message_parts = [f"📊 *Các sàn có hợp đồng Perpetual cho {coin_name} ({symbol.upper()}):*"]
+        
+        if cex_perps:
+            # Giới hạn hiển thị để tin nhắn không quá dài
+            cex_list_str = ", ".join(list(cex_perps)[:10])
+            message_parts.append(f"\n\n*Sàn CEX:* `{cex_list_str}`")
+            
+        if dex_perps:
+            dex_list_str = ", ".join(list(dex_perps)[:5])
+            message_parts.append(f"\n*Sàn DEX:* `{dex_list_str}`")
+            
+        return "\n".join(message_parts)
+
+    except requests.RequestException as e:
+        print(f"Error in find_perpetual_markets: {e}")
+        return "❌ Lỗi mạng khi lấy dữ liệu thị trường."
 def is_evm_address(s: str) -> bool: return isinstance(s, str) and s.startswith('0x') and len(s) == 42
 def is_tron_address(s: str) -> bool: return isinstance(s, str) and s.startswith('T') and len(s) == 34
 def is_crypto_address(s: str) -> bool: return is_evm_address(s) or is_tron_address(s)
@@ -287,6 +349,7 @@ def webhook():
                              "`/gt <thuật ngữ>`\n"
                              "`/tr <nội dung>`\n"
                              "`/ktrank <username>`\n\n"
+                             "`/perp <ký hiệu>` - Tìm sàn Futures\n\n"
                              "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract.\n"
                              "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`")
             send_telegram_message(chat_id, text=start_message)
@@ -325,6 +388,15 @@ def webhook():
                 text_to_translate = " ".join(parts[1:])
                 temp_msg_id = send_telegram_message(chat_id, text="⏳ Đang dịch, đợi tí fen...", reply_to_message_id=msg_id)
                 if temp_msg_id: edit_telegram_message(chat_id, temp_msg_id, text=translate_crypto_text(text_to_translate))
+        elif cmd == '/perp':
+            if len(parts) < 2:
+                send_telegram_message(chat_id, text="Cú pháp: `/perp <ký hiệu>`\nVí dụ: `/perp btc`", reply_to_message_id=msg_id)
+            else:
+                symbol = parts[1]
+                temp_msg_id = send_telegram_message(chat_id, text=f"🔍 Đang tìm các sàn Futures cho *{symbol.upper()}*...", reply_to_message_id=msg_id)
+                if temp_msg_id:
+                    result = find_perpetual_markets(symbol)
+                    edit_telegram_message(chat_id, temp_msg_id, text=result)
         elif cmd == '/ktrank':
             if len(parts) < 2:
                 send_telegram_message(chat_id, text="Cú pháp: `/ktrank <username>`", reply_to_message_id=msg_id)
