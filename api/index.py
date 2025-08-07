@@ -197,7 +197,7 @@ def find_perpetual_markets(symbol: str) -> str:
         # Bước 1: Tìm ID chính xác của coin từ symbol
         search_url = "https://api.coingecko.com/api/v3/search"
         search_params = {'query': symbol}
-        res_search = requests.get(search_url, params=search_params, timeout=100)
+        res_search = requests.get(search_url, params=search_params, timeout=10)
         if res_search.status_code != 200:
             return f"❌ Không thể tìm kiếm thông tin cho `{symbol}`."
         
@@ -205,26 +205,33 @@ def find_perpetual_markets(symbol: str) -> str:
         if not search_results:
             return f"❌ Không tìm thấy token nào có ký hiệu `{symbol}` trên CoinGecko."
         
-        # Lấy kết quả phù hợp nhất (thường là cái đầu tiên)
         coin_id = search_results[0].get('id')
         coin_name = search_results[0].get('name')
 
-        # Bước 2: Dùng ID để lấy danh sách tất cả các thị trường (tickers)
+        # Bước 2: Dùng ID để lấy danh sách thị trường từ NHIỀU trang
         tickers_url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/tickers"
-        params = {'include_exchange_logo': 'false', 'order': 'volume_desc', 'depth': 'false'}
+        all_tickers = []
         
-        res_tickers = requests.get(tickers_url, params=params, timeout=20)
-        if res_tickers.status_code != 200:
+        # Lấy tối đa 5 trang đầu tiên, thường là quá đủ
+        for page in range(1, 6):
+            params = {'include_exchange_logo': 'false', 'order': 'volume_desc', 'depth': 'false', 'page': page}
+            res_tickers = requests.get(tickers_url, params=params, timeout=20)
+            if res_tickers.status_code == 200:
+                tickers_on_page = res_tickers.json().get('tickers', [])
+                if not tickers_on_page: # Dừng lại nếu trang không còn dữ liệu
+                    break
+                all_tickers.extend(tickers_on_page)
+            else:
+                break # Dừng lại nếu có lỗi API
+
+        if not all_tickers:
             return f"✅ Tìm thấy token *{coin_name}*, nhưng không thể lấy dữ liệu giao dịch."
             
-        tickers = res_tickers.json().get('tickers', [])
-        
         # Bước 3: Lọc và nhóm các sàn có hợp đồng Perpetual
         cex_perps = set()
         dex_perps = set()
         
-        for ticker in tickers:
-            # is_anomaly và is_stale là các cờ báo hiệu dữ liệu không đáng tin cậy
+        for ticker in all_tickers:
             if ticker.get('contract_type') == 'perpetual' and not ticker.get('is_anomaly') and not ticker.get('is_stale'):
                 market_name = ticker['market']['name']
                 # Phân loại sàn CEX/DEX dựa trên trust_score
