@@ -193,73 +193,63 @@ def translate_crypto_text(text_to_translate: str) -> str:
         return f"❌ Đã xảy ra lỗi khi kết nối với dịch vụ dịch thuật."
 def find_perpetual_markets(symbol: str) -> str:
     """Tìm các sàn CEX và DEX cho phép giao dịch perpetuals của một token."""
+    url = "https://api.coingecko.com/api/v3/derivatives"
+    params = {'include_tickers': 'unexpired'}
+    
     try:
-        # Bước 1: Tìm ID chính xác của coin từ symbol
-        search_url = "https://api.coingecko.com/api/v3/search"
-        search_params = {'query': symbol}
-        res_search = requests.get(search_url, params=search_params, timeout=10)
-        if res_search.status_code != 200:
-            return f"❌ Không thể tìm kiếm thông tin cho `{symbol}`."
+        res = requests.get(url, params=params, timeout=25) # Tăng timeout vì dữ liệu lớn
+        if res.status_code != 200:
+            return f"❌ Lỗi khi gọi API CoinGecko (Code: {res.status_code})."
         
-        search_results = res_search.json().get('coins', [])
-        if not search_results:
-            return f"❌ Không tìm thấy token nào có ký hiệu `{symbol}` trên CoinGecko."
+        derivatives = res.json()
+        if not derivatives:
+            return "❌ Không thể lấy dữ liệu phái sinh từ CoinGecko."
         
-        coin_id = search_results[0].get('id')
-        coin_name = search_results[0].get('name')
-
-        # Bước 2: Dùng ID để lấy danh sách thị trường từ NHIỀU trang
-        tickers_url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/tickers"
-        all_tickers = []
-        
-        # Lấy tối đa 5 trang đầu tiên, thường là quá đủ
-        for page in range(1, 6):
-            params = {'include_exchange_logo': 'false', 'order': 'volume_desc', 'depth': 'false', 'page': page}
-            res_tickers = requests.get(tickers_url, params=params, timeout=20)
-            if res_tickers.status_code == 200:
-                tickers_on_page = res_tickers.json().get('tickers', [])
-                if not tickers_on_page: # Dừng lại nếu trang không còn dữ liệu
-                    break
-                all_tickers.extend(tickers_on_page)
-            else:
-                break # Dừng lại nếu có lỗi API
-
-        if not all_tickers:
-            return f"✅ Tìm thấy token *{coin_name}*, nhưng không thể lấy dữ liệu giao dịch."
-            
-        # Bước 3: Lọc và nhóm các sàn có hợp đồng Perpetual
         cex_perps = set()
         dex_perps = set()
+        found = False
         
-        for ticker in all_tickers:
-            if ticker.get('contract_type') == 'perpetual' and not ticker.get('is_anomaly') and not ticker.get('is_stale'):
-                market_name = ticker['market']['name']
-                # Phân loại sàn CEX/DEX dựa trên trust_score
-                if ticker.get('trust_score'):
-                    cex_perps.add(market_name)
-                else:
+        # Lặp qua toàn bộ danh sách hợp đồng phái sinh
+        for contract in derivatives:
+            # So sánh ký hiệu (viết thường) để đảm bảo khớp
+            if contract.get('symbol', '').lower() == symbol.lower():
+                found = True
+                market_name = contract.get('market')
+                
+                # Coingecko không có cờ phân loại CEX/DEX rõ ràng ở đây,
+                # chúng ta có thể tự định nghĩa một danh sách các DEX phổ biến
+                known_dexes = ['dydx', 'vertex protocol', 'drift protocol', 'hyperliquid']
+                
+                is_dex = False
+                for dex in known_dexes:
+                    if dex in market_name.lower():
+                        is_dex = True
+                        break
+                
+                if is_dex:
                     dex_perps.add(market_name)
+                else:
+                    cex_perps.add(market_name)
 
-        if not cex_perps and not dex_perps:
-            return f"ℹ️ Không tìm thấy thị trường Perpetual nào cho *{coin_name} ({symbol.upper()})*."
+        if not found:
+            return f"ℹ️ Không tìm thấy thị trường Perpetual nào cho *{symbol.upper()}*."
 
-        # Bước 4: Định dạng kết quả
-        message_parts = [f"📊 *Các sàn có hợp đồng Perpetual cho {coin_name} ({symbol.upper()}):*"]
+        # Định dạng kết quả
+        message_parts = [f"📊 *Các sàn có hợp đồng Perpetual cho {symbol.upper()}:*"]
         
         if cex_perps:
-            # Giới hạn hiển thị để tin nhắn không quá dài
-            cex_list_str = ", ".join(list(cex_perps)[:10])
+            cex_list_str = ", ".join(sorted(list(cex_perps))[:15]) # Tăng giới hạn hiển thị
             message_parts.append(f"\n\n*Sàn CEX:* `{cex_list_str}`")
             
         if dex_perps:
-            dex_list_str = ", ".join(list(dex_perps)[:5])
+            dex_list_str = ", ".join(sorted(list(dex_perps)))
             message_parts.append(f"\n*Sàn DEX:* `{dex_list_str}`")
             
         return "\n".join(message_parts)
 
     except requests.RequestException as e:
         print(f"Error in find_perpetual_markets: {e}")
-        return "❌ Lỗi mạng khi lấy dữ liệu thị trường."
+        return "❌ Lỗi mạng khi lấy dữ liệu thị trường phái sinh."
 def is_evm_address(s: str) -> bool: return isinstance(s, str) and s.startswith('0x') and len(s) == 42
 def is_tron_address(s: str) -> bool: return isinstance(s, str) and s.startswith('T') and len(s) == 34
 def is_crypto_address(s: str) -> bool: return is_evm_address(s) or is_tron_address(s)
