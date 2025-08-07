@@ -197,7 +197,7 @@ def find_perpetual_markets(symbol: str) -> str:
     params = {'include_tickers': 'unexpired'}
     
     try:
-        res = requests.get(url, params=params, timeout=25) # Tăng timeout vì dữ liệu lớn
+        res = requests.get(url, params=params, timeout=25)
         if res.status_code != 200:
             return f"❌ Lỗi khi gọi API CoinGecko (Code: {res.status_code})."
         
@@ -209,10 +209,14 @@ def find_perpetual_markets(symbol: str) -> str:
         dex_perps = set()
         found = False
         
-        # Lặp qua toàn bộ danh sách hợp đồng phái sinh
+        # Chuyển ký hiệu người dùng nhập thành chữ hoa để so sánh
+        search_symbol = symbol.upper()
+        
         for contract in derivatives:
-            # So sánh ký hiệu (viết thường) để đảm bảo khớp
-            if contract.get('symbol', '').lower() == symbol.lower():
+            contract_symbol = contract.get('symbol', '')
+            
+            # Sửa lỗi: Kiểm tra xem contract_symbol có BẮT ĐẦU BẰNG search_symbol không
+            if contract_symbol.startswith(search_symbol):
                 found = True
                 market_name = contract.get('market')
                 
@@ -238,7 +242,7 @@ def find_perpetual_markets(symbol: str) -> str:
         message_parts = [f"📊 *Các sàn có hợp đồng Perpetual cho {symbol.upper()}:*"]
         
         if cex_perps:
-            cex_list_str = ", ".join(sorted(list(cex_perps))[:15]) # Tăng giới hạn hiển thị
+            cex_list_str = ", ".join(sorted(list(cex_perps))[:15])
             message_parts.append(f"\n\n*Sàn CEX:* `{cex_list_str}`")
             
         if dex_perps:
