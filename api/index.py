@@ -19,7 +19,8 @@ SYMBOL_TO_ID_MAP = {
     'btc': 'bitcoin', 'eth': 'ethereum', 'bnb': 'binancecoin', 'sol': 'solana',
     'xrp': 'ripple', 'doge': 'dogecoin', 'shib': 'shiba-inu', 'degen': 'degen-base',
     'sui': 'sui', 'dev': 'scout-protocol-token', 'hype':'hyperliquid', 'link': 'chainlink',
-    'ondo':'ondo-finance', 'virtual':'virtual-protocol', 'trx':'tron', 'towns':'towns'
+    'ondo':'ondo-finance', 'virtual':'virtual-protocol', 'trx':'tron', 'towns':'towns',
+    'in': 'infinit'
 }
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
