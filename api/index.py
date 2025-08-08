@@ -427,11 +427,7 @@ def webhook():
                 if temp_msg_id:
                     result = find_perpetual_markets(symbol)
                     edit_telegram_message(chat_id, temp_msg_id, text=result)
-        elif cmd == '/gas':
-            temp_msg_id = send_telegram_message(chat_id, text="⛽️ Đang kiểm tra giá gas...", reply_to_message_id=msg_id)
-            if temp_msg_id:
-                result = get_current_gas_price()
-                edit_telegram_message(chat_id, temp_msg_id, text=result)
+        
         elif cmd == '/ktrank':
             if len(parts) < 2:
                 send_telegram_message(chat_id, text="Cú pháp: `/ktrank <username>`", reply_to_message_id=msg_id)
