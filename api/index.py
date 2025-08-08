@@ -255,33 +255,6 @@ def find_perpetual_markets(symbol: str) -> str:
     except requests.RequestException as e:
         print(f"Error in find_perpetual_markets: {e}")
         return "❌ Lỗi mạng khi lấy dữ liệu thị trường phái sinh."
-def get_current_gas_price() -> str:
-    """Lấy và định dạng giá gas Ethereum hiện tại từ Etherscan."""
-    if not ETHERSCAN_API_KEY:
-        return "❌ Lỗi cấu hình: Thiếu `ETHERSCAN_API_KEY`. Vui lòng liên hệ admin."
-
-    url = f"https://api.etherscan.io/api?module=gastracker&action=gasoracle&apikey={ETHERSCAN_API_KEY}"
-    try:
-        res = requests.get(url, timeout=15)
-        if res.status_code != 200:
-            return "❌ Lỗi khi gọi API Etherscan."
-        
-        data = res.json().get('result')
-        if not data:
-            return "❌ Dữ liệu gas không hợp lệ từ Etherscan."
-        
-        safe_gas = data.get('SafeGasPrice', 'N/A')
-        propose_gas = data.get('ProposeGasPrice', 'N/A')
-        fast_gas = data.get('FastGasPrice', 'N/A')
-        
-        return (f"⛽️ *Giá Gas Ethereum (ETH) hiện tại:*\n\n"
-                f"🐢 *Chậm (Safe):* `{safe_gas} Gwei`\n"
-                f"🚶 *Trung bình (Propose):* `{propose_gas} Gwei`\n"
-                f"🚀 *Nhanh (Fast):* `{fast_gas} Gwei`")
-
-    except requests.RequestException as e:
-        print(f"Error checking gas price: {e}")
-        return "❌ Lỗi mạng khi lấy dữ liệu gas."
 def is_evm_address(s: str) -> bool: return isinstance(s, str) and s.startswith('0x') and len(s) == 42
 def is_tron_address(s: str) -> bool: return isinstance(s, str) and s.startswith('T') and len(s) == 34
 def is_crypto_address(s: str) -> bool: return is_evm_address(s) or is_tron_address(s)
@@ -377,8 +350,7 @@ def webhook():
                              "`/calc <ký hiệu> <số lượng>`\n"
                              "`/gt <thuật ngữ>`\n"
                              "`/tr <nội dung>`\n"
-                             "`/gas` - Tra cứu phí gas ETH\n"
-                             "`/ktrank <username>`\n"
+                             "`/ktrank <username>`\n\n"
                              "`/perp <ký hiệu>` - Tìm sàn Futures\n\n"
                              "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract.\n"
                              "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`")
@@ -427,7 +399,6 @@ def webhook():
                 if temp_msg_id:
                     result = find_perpetual_markets(symbol)
                     edit_telegram_message(chat_id, temp_msg_id, text=result)
-        
         elif cmd == '/ktrank':
             if len(parts) < 2:
                 send_telegram_message(chat_id, text="Cú pháp: `/ktrank <username>`", reply_to_message_id=msg_id)
