@@ -167,24 +167,25 @@ def find_perpetual_markets(symbol: str) -> str:
         if not derivatives:
             return "❌ Không thể lấy dữ liệu phái sinh từ CoinGecko."
         
-        # Thay vì dùng set, dùng list để lưu trữ cả funding rate
         markets = []
         found = False
         search_symbol = symbol.upper()
         
         for contract in derivatives:
             contract_symbol = contract.get('symbol', '')
+            
             if contract_symbol.startswith(search_symbol):
                 found = True
                 market_name = contract.get('market')
-                # Lấy funding rate, API trả về dạng %, chúng ta không cần nhân 100
+                
+                # Sửa lỗi: Lấy trực tiếp funding rate và không nhân thêm
+                # API của Coingecko đã trả về funding rate dưới dạng phần trăm
                 funding_rate = contract.get('funding_rate')
                 
-                # Chỉ thêm vào danh sách nếu có funding rate hợp lệ
                 if market_name and funding_rate is not None:
                     markets.append({
                         'name': market_name,
-                        'funding_rate': float(funding_rate) * 100 # Chuyển đổi sang %
+                        'funding_rate': float(funding_rate)
                     })
 
         if not found or not markets:
@@ -196,7 +197,6 @@ def find_perpetual_markets(symbol: str) -> str:
         # Định dạng kết quả
         message_parts = [f"📊 *Funding Rate cho {symbol.upper()} (Perpetual):*"]
         
-        # Giới hạn hiển thị 15 sàn hàng đầu
         for market in markets[:15]:
             rate = market['funding_rate']
             emoji = "🟢" if rate > 0 else "🔴" if rate < 0 else "⚪️"
