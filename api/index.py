@@ -256,20 +256,17 @@ def find_perpetual_markets(symbol: str) -> str:
         print(f"Error in find_perpetual_markets: {e}")
         return "❌ Lỗi mạng khi lấy dữ liệu thị trường phái sinh."
 def set_price_alert(chat_id, address: str, percentage_str: str) -> str:
-    """Thiết lập hoặc xóa cảnh báo giá cho một token."""
+    """Thiết lập cảnh báo giá cho một token."""
     if not kv: return "Lỗi: Chức năng cảnh báo giá không khả dụng do không kết nối được DB."
     
     try:
         percentage = float(percentage_str)
+        # Nếu người dùng nhập 0 hoặc số âm, chuyển sang logic xóa
         if percentage <= 0:
-            # Xóa cảnh báo nếu người dùng nhập số <= 0
-            kv.hdel("price_alerts", f"{chat_id}:{address.lower()}")
-            return f"✅ Đã xóa cảnh báo giá cho token `{address[:6]}...{address[-4:]}`."
+            return unalert_price(chat_id, address)
     except ValueError:
         return "❌ Phần trăm không hợp lệ. Vui lòng nhập một con số (ví dụ: `5`)."
 
-    # Tìm thông tin token để lấy giá tham chiếu
-    # Chúng ta chỉ cần lấy giá, nên có thể dùng một hàm rút gọn
     price_info = get_price_by_contract(address)
     if not price_info:
         return f"❌ Không thể tìm thấy thông tin cho token `{address[:10]}...` để đặt cảnh báo."
@@ -277,19 +274,54 @@ def set_price_alert(chat_id, address: str, percentage_str: str) -> str:
     current_price, network = price_info
     
     alert_data = {
-        "address": address.lower(),
-        "network": network,
-        "chat_id": chat_id,
-        "threshold_percent": percentage,
+        "address": address.lower(), "network": network,
+        "chat_id": chat_id, "threshold_percent": percentage,
         "reference_price": current_price
     }
     
-    # Lưu cảnh báo vào một HASH trong Redis. Key là sự kết hợp của chat_id và address.
     kv.hset("price_alerts", f"{chat_id}:{address.lower()}", json.dumps(alert_data))
     
     return (f"✅ Đã đặt cảnh báo cho token `{address[:6]}...{address[-4:]}`.\n"
             f"Bot sẽ thông báo mỗi khi giá thay đổi `±{percentage}%` so với giá tham chiếu hiện tại là `${current_price:,.4f}`.")
+def unalert_price(chat_id, address: str) -> str:
+    """Xóa một cảnh báo giá đã đặt."""
+    if not kv: return "Lỗi: Chức năng cảnh báo giá không khả dụng do không kết nối được DB."
+    
+    alert_key = f"{chat_id}:{address.lower()}"
+    if kv.hexists("price_alerts", alert_key):
+        kv.hdel("price_alerts", alert_key)
+        return f"✅ Đã xóa cảnh báo giá cho token `{address[:6]}...{address[-4:]}`."
+    else:
+        return f"❌ Không tìm thấy cảnh báo nào cho token `{address[:6]}...{address[-4:]}`."
 
+def list_price_alerts(chat_id) -> str:
+    """Liệt kê tất cả các cảnh báo giá đang hoạt động cho một chat."""
+    if not kv: return "Lỗi: Chức năng cảnh báo giá không khả dụng do không kết nối được DB."
+
+    all_alerts_raw = kv.hgetall("price_alerts")
+    user_alerts = []
+    
+    for key, alert_json in all_alerts_raw.items():
+        if key.startswith(f"{chat_id}:"):
+            try:
+                alert = json.loads(alert_json)
+                user_alerts.append(alert)
+            except json.JSONDecodeError:
+                continue
+    
+    if not user_alerts:
+        return "Bạn chưa đặt cảnh báo giá nào."
+        
+    message_parts = ["*🔔 Danh sách cảnh báo giá đang hoạt động:*"]
+    for alert in user_alerts:
+        address = alert.get('address', 'N/A')
+        threshold = alert.get('threshold_percent', 'N/A')
+        ref_price = alert.get('reference_price', 0)
+        message_parts.append(
+            f"\n- `{address[:10]}...` | Ngưỡng: `±{threshold}%` | Giá tham chiếu: `${ref_price:,.4f}`"
+        )
+        
+    return "\n".join(message_parts)
 def get_price_by_contract(address: str) -> tuple[float, str] | None:
     """Hàm phụ trợ để lấy giá và mạng của token từ địa chỉ contract."""
     for network in AUTO_SEARCH_NETWORKS:
@@ -448,7 +480,9 @@ def webhook():
                              "`/tr <nội dung>`\n"
                              "`/ktrank <username>`\n"
                              "`/perp <ký hiệu>` - Tìm sàn Futures\n"
-                             "`/alert <contract> <%>` - Cảnh báo giá\n\n"
+                             "`/alert <contract> <%>` - Đặt cảnh báo giá\n"
+                             "`/unalert <contract>` - Xóa cảnh báo giá\n"
+                             "`/alerts` - Xem danh sách cảnh báo\n\n"
                              "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract.\n"
                              "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`")
             send_telegram_message(chat_id, text=start_message)
@@ -496,14 +530,20 @@ def webhook():
                 if temp_msg_id:
                     result = find_perpetual_markets(symbol)
                     edit_telegram_message(chat_id, temp_msg_id, text=result)
-        elif cmd == '/alert':
+       elif cmd == '/alert':
             if len(parts) < 3:
-                send_telegram_message(chat_id, text="Cú pháp: `/alert <địa chỉ contract> <% thay đổi>`\nVí dụ: `/alert 0x... 5`\n(Gửi `/alert <địa chỉ> 0` để xóa)", reply_to_message_id=msg_id)
+                send_telegram_message(chat_id, text="Cú pháp: `/alert <contract> <%>`\n(Gửi `/alert <contract> 0` để xóa)", reply_to_message_id=msg_id)
             else:
-                address = parts[1]
-                percentage = parts[2]
-                result = set_price_alert(chat_id, address, percentage)
-                send_telegram_message(chat_id, text=result, reply_to_message_id=msg_id)
+                send_telegram_message(chat_id, text=set_price_alert(chat_id, parts[1], parts[2]), reply_to_message_id=msg_id)
+        
+        elif cmd == '/unalert':
+            if len(parts) < 2:
+                send_telegram_message(chat_id, text="Cú pháp: `/unalert <địa chỉ contract>`", reply_to_message_id=msg_id)
+            else:
+                send_telegram_message(chat_id, text=unalert_price(chat_id, parts[1]), reply_to_message_id=msg_id)
+
+        elif cmd == '/alerts':
+            send_telegram_message(chat_id, text=list_price_alerts(chat_id), reply_to_message_id=msg_id)
         elif cmd == '/ktrank':
             if len(parts) < 2:
                 send_telegram_message(chat_id, text="Cú pháp: `/ktrank <username>`", reply_to_message_id=msg_id)
