@@ -255,34 +255,6 @@ def find_perpetual_markets(symbol: str) -> str:
     except requests.RequestException as e:
         print(f"Error in find_perpetual_markets: {e}")
         return "❌ Lỗi mạng khi lấy dữ liệu thị trường phái sinh."
-def set_price_alert(chat_id, address: str, percentage_str: str) -> str:
-    """Thiết lập cảnh báo giá cho một token."""
-    if not kv: return "Lỗi: Chức năng cảnh báo giá không khả dụng do không kết nối được DB."
-    
-    try:
-        percentage = float(percentage_str)
-        # Nếu người dùng nhập 0 hoặc số âm, chuyển sang logic xóa
-        if percentage <= 0:
-            return unalert_price(chat_id, address)
-    except ValueError:
-        return "❌ Phần trăm không hợp lệ. Vui lòng nhập một con số (ví dụ: `5`)."
-
-    price_info = get_price_by_contract(address)
-    if not price_info:
-        return f"❌ Không thể tìm thấy thông tin cho token `{address[:10]}...` để đặt cảnh báo."
-    
-    current_price, network = price_info
-    
-    alert_data = {
-        "address": address.lower(), "network": network,
-        "chat_id": chat_id, "threshold_percent": percentage,
-        "reference_price": current_price
-    }
-    
-    kv.hset("price_alerts", f"{chat_id}:{address.lower()}", json.dumps(alert_data))
-    
-    return (f"✅ Đã đặt cảnh báo cho token `{address[:6]}...{address[-4:]}`.\n"
-            f"Bot sẽ thông báo mỗi khi giá thay đổi `±{percentage}%` so với giá tham chiếu hiện tại là `${current_price:,.4f}`.")
 def unalert_price(chat_id, address: str) -> str:
     """Xóa một cảnh báo giá đã đặt."""
     if not kv: return "Lỗi: Chức năng cảnh báo giá không khả dụng do không kết nối được DB."
@@ -322,6 +294,34 @@ def list_price_alerts(chat_id) -> str:
         )
         
     return "\n".join(message_parts)
+def set_price_alert(chat_id, address: str, percentage_str: str) -> str:
+    """Thiết lập cảnh báo giá cho một token."""
+    if not kv: return "Lỗi: Chức năng cảnh báo giá không khả dụng do không kết nối được DB."
+    
+    try:
+        percentage = float(percentage_str)
+        # Nếu người dùng nhập 0 hoặc số âm, chuyển sang logic xóa
+        if percentage <= 0:
+            return unalert_price(chat_id, address)
+    except ValueError:
+        return "❌ Phần trăm không hợp lệ. Vui lòng nhập một con số (ví dụ: `5`)."
+
+    price_info = get_price_by_contract(address)
+    if not price_info:
+        return f"❌ Không thể tìm thấy thông tin cho token `{address[:10]}...` để đặt cảnh báo."
+    
+    current_price, network = price_info
+    
+    alert_data = {
+        "address": address.lower(), "network": network,
+        "chat_id": chat_id, "threshold_percent": percentage,
+        "reference_price": current_price
+    }
+    
+    kv.hset("price_alerts", f"{chat_id}:{address.lower()}", json.dumps(alert_data))
+    
+    return (f"✅ Đã đặt cảnh báo cho token `{address[:6]}...{address[-4:]}`.\n"
+            f"Bot sẽ thông báo mỗi khi giá thay đổi `±{percentage}%` so với giá tham chiếu hiện tại là `${current_price:,.4f}`.")
 def get_price_by_contract(address: str) -> tuple[float, str] | None:
     """Hàm phụ trợ để lấy giá và mạng của token từ địa chỉ contract."""
     for network in AUTO_SEARCH_NETWORKS:
