@@ -496,7 +496,6 @@ def webhook():
                 if temp_msg_id:
                     result = find_perpetual_markets(symbol)
                     edit_telegram_message(chat_id, temp_msg_id, text=result)
-        elif cmd == '/tr':
         elif cmd == '/alert':
             if len(parts) < 3:
                 send_telegram_message(chat_id, text="Cú pháp: `/alert <địa chỉ contract> <% thay đổi>`\nVí dụ: `/alert 0x... 5`\n(Gửi `/alert <địa chỉ> 0` để xóa)", reply_to_message_id=msg_id)
