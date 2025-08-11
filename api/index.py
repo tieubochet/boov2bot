@@ -191,30 +191,66 @@ def unalert_price(chat_id, address: str) -> str:
 def set_price_alert(chat_id, address: str, percentage_str: str) -> str:
     """Thiết lập cảnh báo giá cho một token."""
     if not kv: return "Lỗi: Chức năng cảnh báo giá không khả dụng do không kết nối được DB."
+    
     try:
         percentage = float(percentage_str)
-        if percentage <= 0: return unalert_price(chat_id, address)
-    except ValueError: return "❌ Phần trăm không hợp lệ. Vui lòng nhập một con số (ví dụ: `5`)."
-    price_info = get_price_by_contract(address)
-    if not price_info: return f"❌ Không thể tìm thấy thông tin cho token `{address[:10]}...` để đặt cảnh báo."
-    current_price, network = price_info
-    alert_data = {"address": address.lower(), "network": network, "chat_id": chat_id, "threshold_percent": percentage, "reference_price": current_price}
+        if percentage <= 0:
+            return unalert_price(chat_id, address)
+    except ValueError:
+        return "❌ Phần trăm không hợp lệ. Vui lòng nhập một con số (ví dụ: `5`)."
+
+    token_info = get_price_by_contract(address)
+    if not token_info:
+        return f"❌ Không thể tìm thấy thông tin cho token `{address[:10]}...` để đặt cảnh báo."
+    
+    current_price = token_info['price']
+    
+    alert_data = {
+        "address": address.lower(),
+        "network": token_info['network'],
+        "symbol": token_info['symbol'], # Lưu lại symbol
+        "name": token_info['name'],       # Lưu lại name
+        "chat_id": chat_id,
+        "threshold_percent": percentage,
+        "reference_price": current_price
+    }
+    
     kv.hset("price_alerts", f"{chat_id}:{address.lower()}", json.dumps(alert_data))
-    return (f"✅ Đã đặt cảnh báo cho token `{address[:6]}...{address[-4:]}`.\n"
+    
+    return (f"✅ Đã đặt cảnh báo cho *{token_info['name']} (${token_info['symbol']})*.\n"
             f"Bot sẽ thông báo mỗi khi giá thay đổi `±{percentage}%` so với giá tham chiếu hiện tại là `${current_price:,.4f}`.")
 def list_price_alerts(chat_id) -> str:
     """Liệt kê tất cả các cảnh báo giá đang hoạt động cho một chat."""
     if not kv: return "Lỗi: Chức năng cảnh báo giá không khả dụng do không kết nối được DB."
+
     all_alerts_raw = kv.hgetall("price_alerts")
-    user_alerts = [json.loads(alert_json) for key, alert_json in all_alerts_raw.items() if key.startswith(f"{chat_id}:")]
-    if not user_alerts: return "Bạn chưa đặt cảnh báo giá nào."
+    user_alerts = []
+    
+    for key, alert_json in all_alerts_raw.items():
+        if key.startswith(f"{chat_id}:"):
+            try:
+                alert = json.loads(alert_json)
+                user_alerts.append(alert)
+            except json.JSONDecodeError:
+                continue
+    
+    if not user_alerts:
+        return "Bạn chưa đặt cảnh báo giá nào."
+        
     message_parts = ["*🔔 Danh sách cảnh báo giá đang hoạt động:*"]
     for alert in user_alerts:
-        address = alert.get('address', 'N/A'); threshold = alert.get('threshold_percent', 'N/A'); ref_price = alert.get('reference_price', 0)
-        message_parts.append(f"\n- `{address[:10]}...` | Ngưỡng: `±{threshold}%` | Giá tham chiếu: `${ref_price:,.4f}`")
+        symbol = alert.get('symbol', 'N/A')
+        name = alert.get('name', alert.get('address', 'N/A'))
+        threshold = alert.get('threshold_percent', 'N/A')
+        ref_price = alert.get('reference_price', 0)
+        
+        message_parts.append(
+            f"\n- *{name} (${symbol})* | Ngưỡng: `±{threshold}%` | Giá tham chiếu: `${ref_price:,.4f}`"
+        )
+        
     return "\n".join(message_parts)
-
-def get_price_by_contract(address: str) -> tuple[float, str] | None:
+def get_price_by_contract(address: str) -> dict | None:
+    """Hàm phụ trợ để lấy thông tin chi tiết của token từ địa chỉ contract."""
     for network in AUTO_SEARCH_NETWORKS:
         url = f"https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{address}"
         try:
@@ -222,8 +258,15 @@ def get_price_by_contract(address: str) -> tuple[float, str] | None:
             if res.status_code == 200:
                 data = res.json().get('data', {}).get('attributes', {})
                 price_str = data.get('price_usd')
-                if price_str: return (float(price_str), network)
-        except requests.RequestException: continue
+                if price_str:
+                    return {
+                        "price": float(price_str),
+                        "network": network,
+                        "symbol": data.get('symbol', 'N/A'),
+                        "name": data.get('name', 'N/A')
+                    }
+        except requests.RequestException:
+            continue
     return None
 def check_price_alerts():
     if not kv: print("Price Alert check skipped due to no DB connection."); return
@@ -233,21 +276,32 @@ def check_price_alerts():
             alert = json.loads(alert_json)
             address = alert['address']; network = alert['network']; chat_id = alert['chat_id']
             threshold = alert['threshold_percent']; ref_price = alert['reference_price']
-            price_info = get_price_by_contract(address)
-            if not price_info: continue
-            current_price, _ = price_info
+            
+            # Lấy giá hiện tại của token
+            token_info = get_price_by_contract(address)
+            if not token_info: continue
+            
+            current_price = token_info['price']
+            
             price_change_pct = ((current_price - ref_price) / ref_price) * 100 if ref_price > 0 else 0
+            
             if abs(price_change_pct) >= threshold:
                 emoji = "📈" if price_change_pct > 0 else "📉"
-                message = (f"🚨 *Cảnh báo giá!*\n\n"
-                           f"Token: `{address}`\n"
+                # Sử dụng tên và ký hiệu đã lưu
+                name = alert.get('name', address)
+                symbol = alert.get('symbol', 'Token')
+                
+                message = (f"🚨 *Cảnh báo giá cho {name} (${symbol})!*\n\n"
                            f"Mạng: *{network.upper()}*\n\n"
                            f"{emoji} Giá đã thay đổi *{price_change_pct:+.2f}%*\n"
                            f"Giá cũ: `${ref_price:,.4f}`\n"
                            f"Giá mới: *`${current_price:,.4f}`*")
+                
                 send_telegram_message(chat_id, text=message)
+                
                 alert['reference_price'] = current_price
                 kv.hset("price_alerts", key, json.dumps(alert))
+
         except (json.JSONDecodeError, KeyError) as e:
             print(f"Error processing price alert for key {key}: {e}")
             continue
