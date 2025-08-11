@@ -41,51 +41,32 @@ except Exception as e:
 
 # --- CHECK RANK KAITO ---
 def get_user_rank(username: str) -> str:
-    """Lấy dữ liệu rank từ API, nhóm theo dự án và định dạng kết quả."""
     url = f"https://star7777.shop/Kaito/GetUserRank?id={username}"
     try:
         res = requests.get(url, timeout=15)
-        if res.status_code != 200:
-            return f"❌ Lỗi khi gọi API rank (Code: {res.status_code})."
-        
+        if res.status_code != 200: return f"❌ Lỗi khi gọi API rank (Code: {res.status_code})."
         data = res.json()
-        if not data:
-            return f"❌ Không tìm thấy người dùng `{username}`."
-        
-        # --- BẮT ĐẦU LOGIC NHÓM DỮ LIỆU ---
-        
-        # Bước 1: Nhóm dữ liệu theo S_PROJECT_NAME
+        if not data: return f"❌ Không tìm thấy người dùng `{username}`."
         projects = {}
         for rank_info in data:
             project_name = rank_info.get('S_PROJECT_NAME', 'N/A')
-            if project_name not in projects:
-                projects[project_name] = []
+            if project_name not in projects: projects[project_name] = []
             projects[project_name].append(rank_info)
-
-        # Bước 2: Xây dựng chuỗi kết quả từ dữ liệu đã nhóm
         final_message_parts = [f"🏆 *Rank của {username}*"]
-        
         for project_name, ranks in projects.items():
             project_str = f"\n\n- - - - - - - - - -\n\n*{project_name}*"
-            
-            # Lặp qua các rank trong cùng một dự án để lấy thông tin
             for rank_info in ranks:
                 duration = rank_info.get('S_DURATION', 'N/A')
                 rank = rank_info.get('N_RANK', 'N/A')
-                
-                # Thêm dòng chi tiết cho mỗi duration
                 project_str += f"\n`{duration}`: *{rank}*"
-            
             final_message_parts.append(project_str)
-            
         return "".join(final_message_parts)
-
     except requests.RequestException as e:
         print(f"Request exception for Rank API: {e}")
         return "❌ Lỗi mạng khi lấy dữ liệu rank."
     except (json.JSONDecodeError, IndexError):
         return f"❌ Dữ liệu trả về từ API không hợp lệ cho người dùng `{username}`."
-# --- END RANK KAITO---
+
 # --- LOGIC QUẢN LÝ CÔNG VIỆC ---
 def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | None]:
     try:
@@ -102,7 +83,6 @@ def add_task(chat_id, task_string: str) -> tuple[bool, str]:
     if not task_dt or not name_part: return False, "❌ Cú pháp sai. Dùng: `DD/MM HH:mm - Tên công việc`."
     if task_dt < datetime.now(TIMEZONE): return False, "❌ Không thể đặt lịch cho quá khứ."
     tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
-    # Không cần cờ 'reminded' nữa
     tasks.append({"time_iso": task_dt.isoformat(), "name": name_part})
     tasks.sort(key=lambda x: x['time_iso'])
     kv.set(f"tasks:{chat_id}", json.dumps(tasks))
@@ -133,20 +113,8 @@ def list_tasks(chat_id) -> str:
     for i, task in enumerate(active_tasks):
         result_lines.append(f"*{i+1}.* `{datetime.fromisoformat(task['time_iso']).strftime('%H:%M %d/%m')}` - {task['name']}")
     return "\n".join(result_lines)
-# <<< XÓA BỎ TOÀN BỘ HÀM NÀY >>>
-#def delete_task(chat_id, task_index_str: str) -> tuple[bool, str]:
-#    if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
-#    try: task_index = int(index_str) - 1; assert task_index >= 0
-#    except (ValueError, AssertionError): return False, "❌ Số thứ tự không hợp lệ."
-#    user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
-#    active_tasks = [t for t in user_tasks if datetime.fromisoformat(t['time_iso']) > datetime.now(TIMEZONE)]
-#    if task_index >= len(active_tasks): return False, "❌ Số thứ tự không hợp lệ."
-#    task_to_delete = active_tasks.pop(task_index)
-#    updated_tasks = [t for t in user_tasks if t['time_iso'] != task_to_delete['time_iso']]
-#    kv.set(f"tasks:{chat_id}", json.dumps(updated_tasks))
-#    return True, f"✅ Đã xóa lịch hẹn: *{task_to_delete['name']}*"
 
-# --- LOGIC CRYPTO & TIỆN ÍCH BOT (Không thay đổi) ---
+# --- LOGIC CRYPTO & TIỆN ÍCH BOT ---
 def get_price_by_symbol(symbol: str) -> float | None:
     coin_id = SYMBOL_TO_ID_MAP.get(symbol.lower(), symbol.lower())
     url = "https://api.coingecko.com/api/v3/simple/price"; params = {'ids': coin_id, 'vs_currencies': 'usd'}
@@ -178,14 +146,7 @@ def translate_crypto_text(text_to_translate: str) -> str:
     if not GOOGLE_API_KEY: return "❌ Lỗi cấu hình: Thiếu `GOOGLE_API_KEY`."
     try:
         model = genai.GenerativeModel('gemini-2.5-pro')
-        prompt = (
-            "Act as an expert translator specializing in finance and cryptocurrency. "
-            "Your task is to translate the following text into Vietnamese. "
-            "Use accurate and natural-sounding financial/crypto jargon appropriate for a savvy investment community. "
-            "Preserve the original nuance and meaning. Only provide the final Vietnamese translation, without any additional explanation or preamble.\n\n"
-            "Text to translate:\n"
-            f"\"\"\"{text_to_translate}\"\"\""
-        )
+        prompt = (f"Act as an expert translator specializing in finance and cryptocurrency. Your task is to translate the following English text into Vietnamese. Use accurate and natural-sounding financial/crypto jargon appropriate for a savvy investment community. Preserve the original nuance and meaning. Only provide the final Vietnamese translation, without any additional explanation or preamble.\n\nText to translate:\n\"\"\"{text_to_translate}\"\"\"")
         response = model.generate_content(prompt)
         if response.parts: return response.text
         else: return "❌ Không thể dịch văn bản này."
@@ -193,137 +154,67 @@ def translate_crypto_text(text_to_translate: str) -> str:
         print(f"Google Gemini API Error (Translation): {e}")
         return f"❌ Đã xảy ra lỗi khi kết nối với dịch vụ dịch thuật."
 def find_perpetual_markets(symbol: str) -> str:
-    """Tìm các sàn CEX và DEX cho phép giao dịch perpetuals của một token."""
-    url = "https://api.coingecko.com/api/v3/derivatives"
-    params = {'include_tickers': 'unexpired'}
-    
+    url = "https://api.coingecko.com/api/v3/derivatives"; params = {'include_tickers': 'unexpired'}
     try:
         res = requests.get(url, params=params, timeout=25)
-        if res.status_code != 200:
-            return f"❌ Lỗi khi gọi API CoinGecko (Code: {res.status_code})."
-        
+        if res.status_code != 200: return f"❌ Lỗi khi gọi API CoinGecko (Code: {res.status_code})."
         derivatives = res.json()
-        if not derivatives:
-            return "❌ Không thể lấy dữ liệu phái sinh từ CoinGecko."
-        
-        cex_perps = set()
-        dex_perps = set()
-        found = False
-        
-        # Chuyển ký hiệu người dùng nhập thành chữ hoa để so sánh
+        if not derivatives: return "❌ Không thể lấy dữ liệu phái sinh từ CoinGecko."
+        cex_perps = set(); dex_perps = set(); found = False
         search_symbol = symbol.upper()
-        
         for contract in derivatives:
             contract_symbol = contract.get('symbol', '')
-            
-            # Sửa lỗi: Kiểm tra xem contract_symbol có BẮT ĐẦU BẰNG search_symbol không
             if contract_symbol.startswith(search_symbol):
-                found = True
-                market_name = contract.get('market')
-                
-                # Coingecko không có cờ phân loại CEX/DEX rõ ràng ở đây,
-                # chúng ta có thể tự định nghĩa một danh sách các DEX phổ biến
+                found = True; market_name = contract.get('market')
                 known_dexes = ['dydx', 'vertex protocol', 'drift protocol', 'hyperliquid']
-                
-                is_dex = False
-                for dex in known_dexes:
-                    if dex in market_name.lower():
-                        is_dex = True
-                        break
-                
-                if is_dex:
-                    dex_perps.add(market_name)
-                else:
-                    cex_perps.add(market_name)
-
-        if not found:
-            return f"ℹ️ Không tìm thấy thị trường Perpetual nào cho *{symbol.upper()}*."
-
-        # Định dạng kết quả
+                is_dex = any(dex in market_name.lower() for dex in known_dexes)
+                if is_dex: dex_perps.add(market_name)
+                else: cex_perps.add(market_name)
+        if not found: return f"ℹ️ Không tìm thấy thị trường Perpetual nào cho *{symbol.upper()}*."
         message_parts = [f"📊 *Các sàn có hợp đồng Perpetual cho {symbol.upper()}:*"]
-        
-        if cex_perps:
-            cex_list_str = ", ".join(sorted(list(cex_perps))[:15])
-            message_parts.append(f"\n\n*Sàn CEX:* `{cex_list_str}`")
-            
-        if dex_perps:
-            dex_list_str = ", ".join(sorted(list(dex_perps)))
-            message_parts.append(f"\n*Sàn DEX:* `{dex_list_str}`")
-            
+        if cex_perps: message_parts.append(f"\n\n*Sàn CEX:* `{', '.join(sorted(list(cex_perps))[:15])}`")
+        if dex_perps: message_parts.append(f"\n*Sàn DEX:* `{', '.join(sorted(list(dex_perps)))}`")
         return "\n".join(message_parts)
-
     except requests.RequestException as e:
         print(f"Error in find_perpetual_markets: {e}")
         return "❌ Lỗi mạng khi lấy dữ liệu thị trường phái sinh."
+
 def unalert_price(chat_id, address: str) -> str:
     """Xóa một cảnh báo giá đã đặt."""
     if not kv: return "Lỗi: Chức năng cảnh báo giá không khả dụng do không kết nối được DB."
-    
     alert_key = f"{chat_id}:{address.lower()}"
     if kv.hexists("price_alerts", alert_key):
         kv.hdel("price_alerts", alert_key)
         return f"✅ Đã xóa cảnh báo giá cho token `{address[:6]}...{address[-4:]}`."
     else:
         return f"❌ Không tìm thấy cảnh báo nào cho token `{address[:6]}...{address[-4:]}`."
-
-def list_price_alerts(chat_id) -> str:
-    """Liệt kê tất cả các cảnh báo giá đang hoạt động cho một chat."""
-    if not kv: return "Lỗi: Chức năng cảnh báo giá không khả dụng do không kết nối được DB."
-
-    all_alerts_raw = kv.hgetall("price_alerts")
-    user_alerts = []
-    
-    for key, alert_json in all_alerts_raw.items():
-        if key.startswith(f"{chat_id}:"):
-            try:
-                alert = json.loads(alert_json)
-                user_alerts.append(alert)
-            except json.JSONDecodeError:
-                continue
-    
-    if not user_alerts:
-        return "Bạn chưa đặt cảnh báo giá nào."
-        
-    message_parts = ["*🔔 Danh sách cảnh báo giá đang hoạt động:*"]
-    for alert in user_alerts:
-        address = alert.get('address', 'N/A')
-        threshold = alert.get('threshold_percent', 'N/A')
-        ref_price = alert.get('reference_price', 0)
-        message_parts.append(
-            f"\n- `{address[:10]}...` | Ngưỡng: `±{threshold}%` | Giá tham chiếu: `${ref_price:,.4f}`"
-        )
-        
-    return "\n".join(message_parts)
 def set_price_alert(chat_id, address: str, percentage_str: str) -> str:
     """Thiết lập cảnh báo giá cho một token."""
     if not kv: return "Lỗi: Chức năng cảnh báo giá không khả dụng do không kết nối được DB."
-    
     try:
         percentage = float(percentage_str)
-        # Nếu người dùng nhập 0 hoặc số âm, chuyển sang logic xóa
-        if percentage <= 0:
-            return unalert_price(chat_id, address)
-    except ValueError:
-        return "❌ Phần trăm không hợp lệ. Vui lòng nhập một con số (ví dụ: `5`)."
-
+        if percentage <= 0: return unalert_price(chat_id, address)
+    except ValueError: return "❌ Phần trăm không hợp lệ. Vui lòng nhập một con số (ví dụ: `5`)."
     price_info = get_price_by_contract(address)
-    if not price_info:
-        return f"❌ Không thể tìm thấy thông tin cho token `{address[:10]}...` để đặt cảnh báo."
-    
+    if not price_info: return f"❌ Không thể tìm thấy thông tin cho token `{address[:10]}...` để đặt cảnh báo."
     current_price, network = price_info
-    
-    alert_data = {
-        "address": address.lower(), "network": network,
-        "chat_id": chat_id, "threshold_percent": percentage,
-        "reference_price": current_price
-    }
-    
+    alert_data = {"address": address.lower(), "network": network, "chat_id": chat_id, "threshold_percent": percentage, "reference_price": current_price}
     kv.hset("price_alerts", f"{chat_id}:{address.lower()}", json.dumps(alert_data))
-    
     return (f"✅ Đã đặt cảnh báo cho token `{address[:6]}...{address[-4:]}`.\n"
             f"Bot sẽ thông báo mỗi khi giá thay đổi `±{percentage}%` so với giá tham chiếu hiện tại là `${current_price:,.4f}`.")
+def list_price_alerts(chat_id) -> str:
+    """Liệt kê tất cả các cảnh báo giá đang hoạt động cho một chat."""
+    if not kv: return "Lỗi: Chức năng cảnh báo giá không khả dụng do không kết nối được DB."
+    all_alerts_raw = kv.hgetall("price_alerts")
+    user_alerts = [json.loads(alert_json) for key, alert_json in all_alerts_raw.items() if key.startswith(f"{chat_id}:")]
+    if not user_alerts: return "Bạn chưa đặt cảnh báo giá nào."
+    message_parts = ["*🔔 Danh sách cảnh báo giá đang hoạt động:*"]
+    for alert in user_alerts:
+        address = alert.get('address', 'N/A'); threshold = alert.get('threshold_percent', 'N/A'); ref_price = alert.get('reference_price', 0)
+        message_parts.append(f"\n- `{address[:10]}...` | Ngưỡng: `±{threshold}%` | Giá tham chiếu: `${ref_price:,.4f}`")
+    return "\n".join(message_parts)
+
 def get_price_by_contract(address: str) -> tuple[float, str] | None:
-    """Hàm phụ trợ để lấy giá và mạng của token từ địa chỉ contract."""
     for network in AUTO_SEARCH_NETWORKS:
         url = f"https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{address}"
         try:
@@ -331,40 +222,21 @@ def get_price_by_contract(address: str) -> tuple[float, str] | None:
             if res.status_code == 200:
                 data = res.json().get('data', {}).get('attributes', {})
                 price_str = data.get('price_usd')
-                if price_str:
-                    return (float(price_str), network)
-        except requests.RequestException:
-            continue
+                if price_str: return (float(price_str), network)
+        except requests.RequestException: continue
     return None
-
 def check_price_alerts():
-    """Quét tất cả các cảnh báo giá và gửi thông báo nếu cần."""
-    if not kv:
-        print("Price Alert check skipped due to no DB connection.")
-        return
-        
+    if not kv: print("Price Alert check skipped due to no DB connection."); return
     all_alerts_raw = kv.hgetall("price_alerts")
-    
     for key, alert_json in all_alerts_raw.items():
         try:
             alert = json.loads(alert_json)
-            address = alert['address']
-            network = alert['network']
-            chat_id = alert['chat_id']
-            threshold = alert['threshold_percent']
-            ref_price = alert['reference_price']
-            
-            # Lấy giá hiện tại của token
+            address = alert['address']; network = alert['network']; chat_id = alert['chat_id']
+            threshold = alert['threshold_percent']; ref_price = alert['reference_price']
             price_info = get_price_by_contract(address)
-            if not price_info:
-                continue # Bỏ qua nếu không lấy được giá
-            
+            if not price_info: continue
             current_price, _ = price_info
-            
-            # Tính toán phần trăm thay đổi
             price_change_pct = ((current_price - ref_price) / ref_price) * 100 if ref_price > 0 else 0
-            
-            # Kiểm tra xem thay đổi có vượt ngưỡng không (cả tăng và giảm)
             if abs(price_change_pct) >= threshold:
                 emoji = "📈" if price_change_pct > 0 else "📉"
                 message = (f"🚨 *Cảnh báo giá!*\n\n"
@@ -373,13 +245,9 @@ def check_price_alerts():
                            f"{emoji} Giá đã thay đổi *{price_change_pct:+.2f}%*\n"
                            f"Giá cũ: `${ref_price:,.4f}`\n"
                            f"Giá mới: *`${current_price:,.4f}`*")
-                
                 send_telegram_message(chat_id, text=message)
-                
-                # Cập nhật lại giá tham chiếu để reset ngưỡng
                 alert['reference_price'] = current_price
                 kv.hset("price_alerts", key, json.dumps(alert))
-
         except (json.JSONDecodeError, KeyError) as e:
             print(f"Error processing price alert for key {key}: {e}")
             continue
@@ -479,19 +347,16 @@ def webhook():
                              "`/gt <thuật ngữ>`\n"
                              "`/tr <nội dung>`\n"
                              "`/ktrank <username>`\n"
-                             "`/perp <ký hiệu>` - Tìm sàn Futures\n"
-                             "`/alert <contract> <%>` - Đặt cảnh báo giá\n"
-                             "`/unalert <contract>` - Xóa cảnh báo giá\n"
-                             "`/alerts` - Xem danh sách cảnh báo\n\n"
-                             "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract.\n"
-                             "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`")
+                             "`/perp <ký hiệu>`\n"
+                             "`/alert <contract> <%>`\n"
+                             "`/unalert <contract>`\n"
+                             "`/alerts`\n\n"
+                             "1️⃣ *Tra cứu Token theo Contract*\n"
+                             "2️⃣ *Tính Portfolio*\n")
             send_telegram_message(chat_id, text=start_message)
         elif cmd in ['/add', '/edit']:
             success = False; message = ""
             if cmd == '/add': success, message = add_task(chat_id, " ".join(parts[1:]))
-            #elif cmd == '/del':
-            #    if len(parts) > 1: success, message = delete_task(chat_id, parts[1])
-            #    else: message = "Cú pháp: `/del <số>`"
             elif cmd == '/edit':
                 if len(parts) < 3: message = "Cú pháp: `/edit <số> DD/MM HH:mm - Tên mới`"
                 else: success, message = edit_task(chat_id, parts[1], " ".join(parts[2:]))
@@ -522,35 +387,28 @@ def webhook():
                 temp_msg_id = send_telegram_message(chat_id, text="⏳ Đang dịch, đợi tí fen...", reply_to_message_id=msg_id)
                 if temp_msg_id: edit_telegram_message(chat_id, temp_msg_id, text=translate_crypto_text(text_to_translate))
         elif cmd == '/perp':
-            if len(parts) < 2:
-                send_telegram_message(chat_id, text="Cú pháp: `/perp <ký hiệu>`\nVí dụ: `/perp btc`", reply_to_message_id=msg_id)
+            if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/perp <ký hiệu>`", reply_to_message_id=msg_id)
             else:
                 symbol = parts[1]
                 temp_msg_id = send_telegram_message(chat_id, text=f"🔍 Đang tìm các sàn Futures cho *{symbol.upper()}*...", reply_to_message_id=msg_id)
                 if temp_msg_id: edit_telegram_message(chat_id, temp_msg_id, text=find_perpetual_markets(symbol))
-       elif cmd == '/alert':
+        elif cmd == '/alert':
             if len(parts) < 3:
-                send_telegram_message(chat_id, text="Cú pháp: `/alert <contract> <%>`\n(Gửi `/alert <contract> 0` để xóa)", reply_to_message_id=msg_id)
-            else:
-                send_telegram_message(chat_id, text=set_price_alert(chat_id, parts[1], parts[2]), reply_to_message_id=msg_id)
-        
+                send_telegram_message(chat_id, text="Cú pháp: `/alert <contract> <%>`", reply_to_message_id=msg_id)
+            else: send_telegram_message(chat_id, text=set_price_alert(chat_id, parts[1], parts[2]), reply_to_message_id=msg_id)
         elif cmd == '/unalert':
             if len(parts) < 2:
                 send_telegram_message(chat_id, text="Cú pháp: `/unalert <địa chỉ contract>`", reply_to_message_id=msg_id)
             else:
                 send_telegram_message(chat_id, text=unalert_price(chat_id, parts[1]), reply_to_message_id=msg_id)
-
         elif cmd == '/alerts':
             send_telegram_message(chat_id, text=list_price_alerts(chat_id), reply_to_message_id=msg_id)
         elif cmd == '/ktrank':
-            if len(parts) < 2:
-                send_telegram_message(chat_id, text="Cú pháp: `/ktrank <username>`", reply_to_message_id=msg_id)
+            if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/ktrank <username>`", reply_to_message_id=msg_id)
             else:
                 username = parts[1]
                 temp_msg_id = send_telegram_message(chat_id, text=f"🏆 Đang tìm rank cho *{username}*...", reply_to_message_id=msg_id)
-                if temp_msg_id:
-                    result = get_user_rank(username)
-                    edit_telegram_message(chat_id, temp_msg_id, text=result)
+                if temp_msg_id: edit_telegram_message(chat_id, temp_msg_id, text=get_user_rank(username))
         return jsonify(success=True)
     if len(parts) == 1 and is_crypto_address(parts[0]):
         send_telegram_message(chat_id, text=find_token_across_networks(parts[0]), reply_to_message_id=msg_id, disable_web_page_preview=True)
@@ -559,7 +417,8 @@ def webhook():
         if portfolio_result:
             refresh_btn = {'inline_keyboard': [[{'text': '🔄 Refresh', 'callback_data': 'refresh_portfolio'}]]}
             send_telegram_message(chat_id, text=portfolio_result, reply_to_message_id=msg_id, reply_markup=json.dumps(refresh_btn))
-        #else: send_telegram_message(chat_id, text="🤔 Cú pháp không hợp lệ. Gửi /start để xem hướng dẫn.", reply_to_message_id=msg_id)
+        else:
+            send_telegram_message(chat_id, text="🤔 Cú pháp không hợp lệ. Gửi /start để xem hướng dẫn.", reply_to_message_id=msg_id)
     return jsonify(success=True)
 
 @app.route('/check_reminders', methods=['POST'])
@@ -569,53 +428,40 @@ def cron_webhook():
     if secret != CRON_SECRET: return jsonify(error="Unauthorized"), 403
     print(f"[{datetime.now()}] Running reminder check...")
     reminders_sent = 0
-    tasks_to_keep = {}
-
     for key in kv.scan_iter("tasks:*"):
-        chat_id = key.split(':')[1]
-        user_tasks = json.loads(kv.get(key) or '[]')
+        chat_id = key.split(':')[1]; user_tasks = json.loads(kv.get(key) or '[]')
         now = datetime.now(TIMEZONE)
-        
-        # Lọc ra các công việc chưa hết hạn để lưu lại
-        tasks_to_keep[chat_id] = [task for task in user_tasks if datetime.fromisoformat(task['time_iso']) > now]
-        
+        active_tasks_after_check = []
+        tasks_changed = False
         for task in user_tasks:
             task_time = datetime.fromisoformat(task['time_iso'])
-            time_until_due = task_time - now
-            
-            if timedelta(seconds=1) < time_until_due <= timedelta(minutes=REMINDER_THRESHOLD_MINUTES):
-                last_reminded_key = f"last_reminded:{chat_id}:{task['time_iso']}"
-                last_reminded_ts_str = kv.get(last_reminded_key)
-                last_reminded_ts = float(last_reminded_ts_str) if last_reminded_ts_str else 0
-                
-                # Chỉ nhắc lại nếu lần nhắc cuối đã hơn 9 phút trước (an toàn cho cron job 10 phút)
-                if (datetime.now().timestamp() - last_reminded_ts) > 540:
-                    minutes_left = int(time_until_due.total_seconds() / 60)
-                    reminder_text = f"‼️ *ANH NHẮC EM* ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
-                    sent_message_id = send_telegram_message(chat_id, text=reminder_text)
-                    if sent_message_id:
-                        pin_telegram_message(chat_id, sent_message_id)
-                    
-                    kv.set(last_reminded_key, datetime.now().timestamp())
-                    kv.expire(last_reminded_key, 3600) # Tự xóa key sau 1 giờ
-                    reminders_sent += 1
-
-        # Cập nhật lại danh sách công việc sau khi đã lọc bỏ các task hết hạn
-        if len(tasks_to_keep[chat_id]) < len(user_tasks):
-            kv.set(key, json.dumps(tasks_to_keep[chat_id]))
-
+            if task_time > now:
+                active_tasks_after_check.append(task)
+                time_until_due = task_time - now
+                if timedelta(seconds=1) < time_until_due <= timedelta(minutes=REMINDER_THRESHOLD_MINUTES):
+                    last_reminded_key = f"last_reminded:{chat_id}:{task['time_iso']}"
+                    last_reminded_ts_str = kv.get(last_reminded_key)
+                    last_reminded_ts = float(last_reminded_ts_str) if last_reminded_ts_str else 0
+                    if (datetime.now().timestamp() - last_reminded_ts) > 270:
+                        minutes_left = int(time_until_due.total_seconds() / 60)
+                        reminder_text = f"‼️ *ANH NHẮC EM* ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
+                        sent_message_id = send_telegram_message(chat_id, text=reminder_text)
+                        if sent_message_id: pin_telegram_message(chat_id, sent_message_id)
+                        kv.set(last_reminded_key, datetime.now().timestamp(), ex=3600)
+                        reminders_sent += 1
+            else:
+                tasks_changed = True
+        if tasks_changed:
+            kv.set(key, json.dumps(active_tasks_after_check))
     result = {"status": "success", "reminders_sent": reminders_sent}
     print(result)
     return jsonify(result)
 
 @app.route('/check_alerts', methods=['POST'])
 def alert_cron_webhook():
-    if not kv or not BOT_TOKEN or not CRON_SECRET:
-        return jsonify(error="Server not configured"), 500
+    if not kv or not BOT_TOKEN or not CRON_SECRET: return jsonify(error="Server not configured"), 500
     secret = request.headers.get('X-Cron-Secret') or (request.is_json and request.get_json().get('secret'))
     if secret != CRON_SECRET: return jsonify(error="Unauthorized"), 403
-    
     print(f"[{datetime.now()}] Running price alert check...")
     check_price_alerts()
-    
     return jsonify(success=True)
