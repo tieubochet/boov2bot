@@ -154,27 +154,57 @@ def translate_crypto_text(text_to_translate: str) -> str:
         print(f"Google Gemini API Error (Translation): {e}")
         return f"❌ Đã xảy ra lỗi khi kết nối với dịch vụ dịch thuật."
 def find_perpetual_markets(symbol: str) -> str:
-    url = "https://api.coingecko.com/api/v3/derivatives"; params = {'include_tickers': 'unexpired'}
+    """Tìm các sàn CEX và DEX có hợp đồng perpetual và hiển thị funding rate."""
+    url = "https://api.coingecko.com/api/v3/derivatives"
+    params = {'include_tickers': 'unexpired'}
+    
     try:
         res = requests.get(url, params=params, timeout=25)
-        if res.status_code != 200: return f"❌ Lỗi khi gọi API CoinGecko (Code: {res.status_code})."
+        if res.status_code != 200:
+            return f"❌ Lỗi khi gọi API CoinGecko (Code: {res.status_code})."
+        
         derivatives = res.json()
-        if not derivatives: return "❌ Không thể lấy dữ liệu phái sinh từ CoinGecko."
-        cex_perps = set(); dex_perps = set(); found = False
+        if not derivatives:
+            return "❌ Không thể lấy dữ liệu phái sinh từ CoinGecko."
+        
+        # Thay vì dùng set, dùng list để lưu trữ cả funding rate
+        markets = []
+        found = False
         search_symbol = symbol.upper()
+        
         for contract in derivatives:
             contract_symbol = contract.get('symbol', '')
             if contract_symbol.startswith(search_symbol):
-                found = True; market_name = contract.get('market')
-                known_dexes = ['dydx', 'vertex protocol', 'drift protocol', 'hyperliquid']
-                is_dex = any(dex in market_name.lower() for dex in known_dexes)
-                if is_dex: dex_perps.add(market_name)
-                else: cex_perps.add(market_name)
-        if not found: return f"ℹ️ Không tìm thấy thị trường Perpetual nào cho *{symbol.upper()}*."
-        message_parts = [f"📊 *Các sàn có hợp đồng Perpetual cho {symbol.upper()}:*"]
-        if cex_perps: message_parts.append(f"\n\n*Sàn CEX:* `{', '.join(sorted(list(cex_perps))[:15])}`")
-        if dex_perps: message_parts.append(f"\n*Sàn DEX:* `{', '.join(sorted(list(dex_perps)))}`")
+                found = True
+                market_name = contract.get('market')
+                # Lấy funding rate, API trả về dạng %, chúng ta không cần nhân 100
+                funding_rate = contract.get('funding_rate')
+                
+                # Chỉ thêm vào danh sách nếu có funding rate hợp lệ
+                if market_name and funding_rate is not None:
+                    markets.append({
+                        'name': market_name,
+                        'funding_rate': float(funding_rate) * 100 # Chuyển đổi sang %
+                    })
+
+        if not found or not markets:
+            return f"ℹ️ Không tìm thấy thị trường Perpetual nào có dữ liệu funding rate cho *{symbol.upper()}*."
+
+        # Sắp xếp các sàn theo funding rate từ cao đến thấp
+        markets.sort(key=lambda x: x['funding_rate'], reverse=True)
+        
+        # Định dạng kết quả
+        message_parts = [f"📊 *Funding Rate cho {symbol.upper()} (Perpetual):*"]
+        
+        # Giới hạn hiển thị 15 sàn hàng đầu
+        for market in markets[:15]:
+            rate = market['funding_rate']
+            emoji = "🟢" if rate > 0 else "🔴" if rate < 0 else "⚪️"
+            # Định dạng funding rate với 4 chữ số thập phân
+            message_parts.append(f"{emoji} `{market['name']}`: `{rate:+.4f}%`")
+            
         return "\n".join(message_parts)
+
     except requests.RequestException as e:
         print(f"Error in find_perpetual_markets: {e}")
         return "❌ Lỗi mạng khi lấy dữ liệu thị trường phái sinh."
