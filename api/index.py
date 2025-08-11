@@ -446,8 +446,9 @@ def webhook():
                              "`/calc <ký hiệu> <số lượng>`\n"
                              "`/gt <thuật ngữ>`\n"
                              "`/tr <nội dung>`\n"
-                             "`/ktrank <username>`\n\n"
-                             "`/perp <ký hiệu>` - Tìm sàn Futures\n\n"
+                             "`/ktrank <username>`\n"
+                             "`/perp <ký hiệu>` - Tìm sàn Futures\n"
+                             "`/alert <contract> <%>` - Cảnh báo giá\n\n"
                              "1️⃣ *Tra cứu Token theo Contract*\nChỉ cần gửi địa chỉ contract.\n"
                              "2️⃣ *Tính Portfolio*\nGửi danh sách theo cú pháp:\n`[số lượng] [địa chỉ] [mạng]`")
             send_telegram_message(chat_id, text=start_message)
@@ -495,6 +496,15 @@ def webhook():
                 if temp_msg_id:
                     result = find_perpetual_markets(symbol)
                     edit_telegram_message(chat_id, temp_msg_id, text=result)
+        elif cmd == '/tr':
+        elif cmd == '/alert':
+            if len(parts) < 3:
+                send_telegram_message(chat_id, text="Cú pháp: `/alert <địa chỉ contract> <% thay đổi>`\nVí dụ: `/alert 0x... 5`\n(Gửi `/alert <địa chỉ> 0` để xóa)", reply_to_message_id=msg_id)
+            else:
+                address = parts[1]
+                percentage = parts[2]
+                result = set_price_alert(chat_id, address, percentage)
+                send_telegram_message(chat_id, text=result, reply_to_message_id=msg_id)
         elif cmd == '/ktrank':
             if len(parts) < 2:
                 send_telegram_message(chat_id, text="Cú pháp: `/ktrank <username>`", reply_to_message_id=msg_id)
@@ -560,3 +570,15 @@ def cron_webhook():
     result = {"status": "success", "reminders_sent": reminders_sent}
     print(result)
     return jsonify(result)
+
+@app.route('/check_alerts', methods=['POST'])
+def alert_cron_webhook():
+    if not kv or not BOT_TOKEN or not CRON_SECRET:
+        return jsonify(error="Server not configured"), 500
+    secret = request.headers.get('X-Cron-Secret') or (request.is_json and request.get_json().get('secret'))
+    if secret != CRON_SECRET: return jsonify(error="Unauthorized"), 403
+    
+    print(f"[{datetime.now()}] Running price alert check...")
+    check_price_alerts()
+    
+    return jsonify(success=True)
