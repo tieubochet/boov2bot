@@ -38,7 +38,6 @@ try:
     kv = Redis.from_url(kv_url, decode_responses=True)
 except Exception as e:
     print(f"FATAL: Could not connect to Redis. Error: {e}"); kv = None
-
 # --- LOGIC QUẢN LÝ CÔNG VIỆC ---
 def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | None]:
     try:
@@ -49,16 +48,60 @@ def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | Non
         dt_naive = datetime.strptime(time_part.strip(), '%d/%m %H:%M')
         return now.replace(month=dt_naive.month, day=dt_naive.day, hour=dt_naive.hour, minute=dt_naive.minute, second=0, microsecond=0), name_part
     except ValueError: return None, None
+
 def add_task(chat_id, task_string: str) -> tuple[bool, str]:
     if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
     task_dt, name_part = parse_task_from_string(task_string)
     if not task_dt or not name_part: return False, "❌ Cú pháp sai. Dùng: `DD/MM HH:mm - Tên công việc`."
     if task_dt < datetime.now(TIMEZONE): return False, "❌ Không thể đặt lịch cho quá khứ."
     tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
-    tasks.append({"time_iso": task_dt.isoformat(), "name": name_part})
+    # Thêm type: 'simple' để phân biệt
+    tasks.append({"type": "simple", "time_iso": task_dt.isoformat(), "name": name_part})
     tasks.sort(key=lambda x: x['time_iso'])
     kv.set(f"tasks:{chat_id}", json.dumps(tasks))
     return True, f"✅ Đã thêm lịch: *{name_part}*."
+def add_alpha_task(chat_id, task_string: str) -> tuple[bool, str]:
+    if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
+    
+    try:
+        # Tách chuỗi thành 3 phần: time, event_name, token_info
+        parts = task_string.split(' - ', 2)
+        if len(parts) != 3: raise ValueError
+        
+        time_part = parts[0]
+        event_name = parts[1].strip()
+        token_info_part = parts[2].strip()
+
+        # Phân tích cú pháp thời gian và tên sự kiện
+        task_dt, _ = parse_task_from_string(f"{time_part} - {event_name}") # Tái sử dụng hàm cũ
+        if not task_dt or not event_name:
+            raise ValueError
+
+        # Phân tích cú pháp thông tin token
+        token_info = token_info_part.strip("'").split()
+        if len(token_info) != 2: raise ValueError
+        amount_str, contract = token_info
+        amount = float(amount_str)
+        if not is_crypto_address(contract):
+            return False, f"❌ Địa chỉ contract không hợp lệ: `{contract}`"
+            
+    except (ValueError, IndexError):
+        return False, "❌ Cú pháp sai. Dùng: `/alpha DD/MM HH:mm - Tên sự kiện - 'số lượng' 'contract'`."
+
+    if task_dt < datetime.now(TIMEZONE): return False, "❌ Không thể đặt lịch cho quá khứ."
+
+    tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
+    tasks.append({
+        "type": "alpha",
+        "time_iso": task_dt.isoformat(),
+        "name": event_name,
+        "amount": amount,
+        "contract": contract
+    })
+    tasks.sort(key=lambda x: x['time_iso'])
+    kv.set(f"tasks:{chat_id}", json.dumps(tasks))
+    return True, f"✅ Đã thêm lịch Alpha: *{event_name}*."
+
 def edit_task(chat_id, index_str: str, new_task_string: str) -> tuple[bool, str]:
     if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
     try: task_index = int(index_str) - 1; assert task_index >= 0
