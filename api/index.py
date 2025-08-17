@@ -530,6 +530,14 @@ def webhook():
                 text_to_translate = " ".join(parts[1:])
                 temp_msg_id = send_telegram_message(chat_id, text="⏳ Đang dịch, đợi tí fen...", reply_to_message_id=msg_id)
                 if temp_msg_id: edit_telegram_message(chat_id, temp_msg_id, text=translate_crypto_text(text_to_translate))
+        elif cmd == '/alpha':
+            success, message = add_alpha_task(chat_id, " ".join(parts[1:]))
+            if success:
+                temp_msg_id = send_telegram_message(chat_id, text=message, reply_to_message_id=msg_id)
+                send_telegram_message(chat_id, text=list_tasks(chat_id))
+                if temp_msg_id: delete_telegram_message(chat_id, temp_msg_id)
+            else:
+                send_telegram_message(chat_id, text=message, reply_to_message_id=msg_id)
         elif cmd == '/perp':
             if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/perp <ký hiệu>`", reply_to_message_id=msg_id)
             else:
