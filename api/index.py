@@ -487,6 +487,7 @@ def webhook():
                              "`/add DD/MM HH:mm - Tên`\n"
                              "`/list`, `/edit <số> ...`\n\n"
                              "**Chức năng Crypto:**\n"
+                             "`/alpha <time> - <event> - '<amount> <contract>'`\n"
                              "`/gia <ký hiệu>`\n"
                              "`/calc <ký hiệu> <số lượng>`\n"
                              "`/gt <thuật ngữ>`\n"
