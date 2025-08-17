@@ -64,26 +64,26 @@ def add_alpha_task(chat_id, task_string: str) -> tuple[bool, str]:
     if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
     
     try:
-        # Tách chuỗi thành 3 phần: time, event_name, token_info
         parts = task_string.split(' - ', 2)
         if len(parts) != 3: raise ValueError
         
-        time_part = parts[0]
-        event_name = parts[1].strip()
-        token_info_part = parts[2].strip()
+        time_part, event_name, token_info_part = parts[0], parts[1].strip(), parts[2].strip()
 
-        # Phân tích cú pháp thời gian và tên sự kiện
-        task_dt, _ = parse_task_from_string(f"{time_part} - {event_name}") # Tái sử dụng hàm cũ
-        if not task_dt or not event_name:
-            raise ValueError
+        task_dt, _ = parse_task_from_string(f"{time_part} - {event_name}")
+        if not task_dt or not event_name: raise ValueError
 
-        # Phân tích cú pháp thông tin token
         token_info = token_info_part.strip("'").split()
         if len(token_info) != 2: raise ValueError
         amount_str, contract = token_info
         amount = float(amount_str)
-        if not is_crypto_address(contract):
-            return False, f"❌ Địa chỉ contract không hợp lệ: `{contract}`"
+        
+        if not is_evm_address(contract): # Chỉ chấp nhận địa chỉ EVM cho BSC
+            return False, f"❌ Địa chỉ contract BSC không hợp lệ: `{contract}`"
+            
+        # <<< THAY ĐỔI: Kiểm tra giá ngay khi đặt lịch >>>
+        initial_price = get_bsc_price_by_contract(contract)
+        if initial_price is None:
+            return False, f"❌ Không tìm thấy token với contract `{contract[:10]}...` trên mạng BSC."
             
     except (ValueError, IndexError):
         return False, "❌ Cú pháp sai. Dùng: `/alpha DD/MM HH:mm - Tên sự kiện - 'số lượng' 'contract'`."
@@ -101,7 +101,6 @@ def add_alpha_task(chat_id, task_string: str) -> tuple[bool, str]:
     tasks.sort(key=lambda x: x['time_iso'])
     kv.set(f"tasks:{chat_id}", json.dumps(tasks))
     return True, f"✅ Đã thêm lịch Alpha: *{event_name}*."
-
 def edit_task(chat_id, index_str: str, new_task_string: str) -> tuple[bool, str]:
     if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
     try: task_index = int(index_str) - 1; assert task_index >= 0
@@ -130,19 +129,19 @@ def list_tasks(chat_id) -> str:
     return "\n".join(result_lines)
 
 # --- LOGIC CRYPTO & TIỆN ÍCH BOT ---
-def get_price_by_contract(address: str) -> tuple[float, str] | None:
-    """Hàm phụ trợ để lấy giá và mạng của token từ địa chỉ contract."""
-    for network in AUTO_SEARCH_NETWORKS:
-        url = f"https://api.geckoterminal.com/api/v2/networks/bsc/tokens/{address}"
-        try:
-            res = requests.get(url, headers={"accept": "application/json"}, timeout=10)
-            if res.status_code == 200:
-                data = res.json().get('data', {}).get('attributes', {})
-                price_str = data.get('price_usd')
-                if price_str:
-                    return (float(price_str), network)
-        except requests.RequestException:
-            continue
+def get_bsc_price_by_contract(address: str) -> float | None:
+    """Hàm chuyên biệt chỉ lấy giá của token trên mạng BSC."""
+    network = 'bsc'
+    url = f"https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{address}"
+    try:
+        res = requests.get(url, headers={"accept": "application/json"}, timeout=10)
+        if res.status_code == 200:
+            data = res.json().get('data', {}).get('attributes', {})
+            price_str = data.get('price_usd')
+            if price_str:
+                return float(price_str)
+    except requests.RequestException as e:
+        print(f"Error getting BSC price for {address}: {e}")
     return None
 def get_price_by_symbol(symbol: str) -> float | None:
     coin_id = SYMBOL_TO_ID_MAP.get(symbol.lower(), symbol.lower())
@@ -586,7 +585,7 @@ def cron_webhook():
         
         for task in user_tasks:
             task_time = datetime.fromisoformat(task['time_iso'])
-            if task_time > now: # Chỉ xử lý các công việc chưa hết hạn
+            if task_time > now:
                 active_tasks_after_check.append(task)
                 time_until_due = task_time - now
                 
@@ -595,17 +594,15 @@ def cron_webhook():
                     last_reminded_ts_str = kv.get(last_reminded_key)
                     last_reminded_ts = float(last_reminded_ts_str) if last_reminded_ts_str else 0
                     
-                    if (datetime.now().timestamp() - last_reminded_ts) > 270: # Chỉ nhắc lại sau 4.5 phút
+                    if (datetime.now().timestamp() - last_reminded_ts) > 270:
                         minutes_left = int(time_until_due.total_seconds() / 60)
                         
-                        # Mặc định là tin nhắn nhắc nhở thông thường
                         reminder_text = f"‼️ *ANH NHẮC EM* ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
 
-                        # Nếu là lịch Alpha, tạo tin nhắn đặc biệt
                         if task.get("type") == "alpha":
-                            price_info = get_price_by_contract(task['contract'])
-                            if price_info:
-                                price, _ = price_info
+                            # <<< THAY ĐỔI: Gọi hàm lấy giá BSC mới >>>
+                            price = get_bsc_price_by_contract(task['contract'])
+                            if price is not None:
                                 value = price * task['amount']
                                 reminder_text = (
                                     f"‼️ *ANH NHẮC EM* ‼️\n\n"
@@ -613,7 +610,7 @@ def cron_webhook():
                                     f"Exch. price: `${price:,.4f}`\n"
                                     f"Value ≈ `${value:,.2f}` (.ref)"
                                 )
-
+                        
                         sent_message_id = send_telegram_message(chat_id, text=reminder_text)
                         if sent_message_id:
                             pin_telegram_message(chat_id, sent_message_id)
@@ -621,7 +618,7 @@ def cron_webhook():
                         kv.set(last_reminded_key, datetime.now().timestamp(), ex=3600)
                         reminders_sent += 1
             else:
-                tasks_changed = True # Đánh dấu có sự thay đổi vì có task đã hết hạn
+                tasks_changed = True
 
         if tasks_changed:
             kv.set(key, json.dumps(active_tasks_after_check))
