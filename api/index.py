@@ -103,19 +103,72 @@ def add_alpha_task(chat_id, task_string: str) -> tuple[bool, str]:
     return True, f"✅ Đã thêm lịch Alpha: *{event_name}*."
 def edit_task(chat_id, index_str: str, new_task_string: str) -> tuple[bool, str]:
     if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
-    try: task_index = int(index_str) - 1; assert task_index >= 0
-    except (ValueError, AssertionError): return False, "❌ Số thứ tự không hợp lệ."
-    new_task_dt, new_name_part = parse_task_from_string(new_task_string)
-    if not new_task_dt or not new_name_part: return False, "❌ Cú pháp công việc mới không hợp lệ. Dùng: `DD/MM HH:mm - Tên công việc`."
+    
+    try:
+        task_index = int(index_str) - 1
+        if task_index < 0: raise ValueError
+    except (ValueError, AssertionError):
+        return False, "❌ Số thứ tự không hợp lệ."
+
     user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
     active_tasks = [t for t in user_tasks if datetime.fromisoformat(t['time_iso']) > datetime.now(TIMEZONE)]
-    if task_index >= len(active_tasks): return False, "❌ Số thứ tự không hợp lệ."
-    task_to_edit_iso = active_tasks[task_index]['time_iso']
-    for task in user_tasks:
-        if task['time_iso'] == task_to_edit_iso:
-            task['time_iso'] = new_task_dt.isoformat(); task['name'] = new_name_part; break
+
+    if task_index >= len(active_tasks):
+        return False, "❌ Số thứ tự không hợp lệ."
+
+    # Xác định công việc cần sửa và loại của nó
+    task_to_edit_ref = active_tasks[task_index]
+    task_type = task_to_edit_ref.get("type", "simple")
+    task_to_edit_iso = task_to_edit_ref['time_iso']
+
+    # Tìm công việc gốc trong danh sách đầy đủ để cập nhật
+    original_task = next((task for task in user_tasks if task['time_iso'] == task_to_edit_iso), None)
+    if not original_task:
+        return False, "❌ Lỗi: Không tìm thấy công việc gốc để sửa."
+
+    # Xử lý dựa trên loại công việc
+    if task_type == "alpha":
+        try:
+            parts = new_task_string.split(' - ', 2)
+            if len(parts) != 3: raise ValueError
+            time_part, event_name, token_info_part = parts[0], parts[1].strip(), parts[2].strip()
+
+            new_task_dt, _ = parse_task_from_string(f"{time_part} - {event_name}")
+            if not new_task_dt or not event_name: raise ValueError
+
+            token_info = token_info_part.strip("'").split()
+            if len(token_info) != 2: raise ValueError
+            amount_str, contract = token_info
+            amount = float(amount_str)
+            
+            if not is_evm_address(contract):
+                return False, f"❌ Địa chỉ contract BSC không hợp lệ: `{contract}`"
+            
+            initial_price = get_bsc_price_by_contract(contract)
+            if initial_price is None:
+                return False, f"❌ Không tìm thấy token với contract `{contract[:10]}...` trên mạng BSC."
+
+            # Cập nhật công việc alpha
+            original_task['time_iso'] = new_task_dt.isoformat()
+            original_task['name'] = event_name
+            original_task['amount'] = amount
+            original_task['contract'] = contract
+            
+        except (ValueError, IndexError):
+            return False, "❌ Cú pháp sai. Dùng: `DD/MM HH:mm - Tên sự kiện - 'số lượng' 'contract'`."
+    
+    else: # Xử lý cho công việc 'simple' (mặc định)
+        new_task_dt, new_name_part = parse_task_from_string(new_task_string)
+        if not new_task_dt or not new_name_part:
+            return False, "❌ Cú pháp sai. Dùng: `DD/MM HH:mm - Tên công việc`."
+        
+        # Cập nhật công việc simple
+        original_task['time_iso'] = new_task_dt.isoformat()
+        original_task['name'] = new_name_part
+
     user_tasks.sort(key=lambda x: x['time_iso'])
     kv.set(f"tasks:{chat_id}", json.dumps(user_tasks))
+    
     return True, f"✅ Đã sửa công việc số *{task_index + 1}*."
 def list_tasks(chat_id) -> str:
     if not kv: return "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
@@ -487,6 +540,7 @@ def webhook():
                              "`/list`, `/edit <số> ...`\n\n"
                              "**Chức năng Crypto:**\n"
                              "`/alpha <time> - <event> - '<amount> <contract>'`\n"
+                             "Ví dụ: /alpha 20/08 22:00 - Alpha: GAME - 132 0x825459139c897d769339f295e962396c4f9e4a4d\n"
                              "`/gia <ký hiệu>`\n"
                              "`/calc <ký hiệu> <số lượng>`\n"
                              "`/gt <thuật ngữ>`\n"
@@ -496,7 +550,9 @@ def webhook():
                              "`/unalert <contract>`\n"
                              "`/alerts`\n\n"
                              "1️⃣ *Tra cứu Token theo Contract*\n"
-                             "2️⃣ *Tính Portfolio*\n")
+                             "2️⃣ *Tính Portfolio*\n"
+                             "Cú pháp: <số lượng> <contract> <chain>\n"
+                             "Ví dụ: 20000 0x825459139c897d769339f295e962396c4f9e4a4d bsc")
             send_telegram_message(chat_id, text=start_message)
         elif cmd in ['/add', '/edit']:
             success = False; message = ""
@@ -607,8 +663,8 @@ def cron_webhook():
                                 reminder_text = (
                                     f"‼️ *ANH NHẮC EM* ‼️\n\n"
                                     f"Sự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa.\n\n"
-                                    f"Exch. price: `${price:,.4f}`\n"
-                                    f"Value ≈ `${value:,.2f}` (.ref)"
+                                    f"Giá token: `${price:,.4f}`\n"
+                                    f"Tổng ≈ `${value:,.2f}` (.ref)"
                                 )
                         
                         sent_message_id = send_telegram_message(chat_id, text=reminder_text)
