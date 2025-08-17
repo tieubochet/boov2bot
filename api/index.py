@@ -564,37 +564,62 @@ def cron_webhook():
     if not kv or not BOT_TOKEN or not CRON_SECRET: return jsonify(error="Server not configured"), 500
     secret = request.headers.get('X-Cron-Secret') or (request.is_json and request.get_json().get('secret'))
     if secret != CRON_SECRET: return jsonify(error="Unauthorized"), 403
+    
     print(f"[{datetime.now()}] Running reminder check...")
     reminders_sent = 0
+    
     for key in kv.scan_iter("tasks:*"):
-        chat_id = key.split(':')[1]; user_tasks = json.loads(kv.get(key) or '[]')
+        chat_id = key.split(':')[1]
+        user_tasks = json.loads(kv.get(key) or '[]')
         now = datetime.now(TIMEZONE)
         active_tasks_after_check = []
         tasks_changed = False
+        
         for task in user_tasks:
             task_time = datetime.fromisoformat(task['time_iso'])
-            if task_time > now:
+            if task_time > now: # Chỉ xử lý các công việc chưa hết hạn
                 active_tasks_after_check.append(task)
                 time_until_due = task_time - now
+                
                 if timedelta(seconds=1) < time_until_due <= timedelta(minutes=REMINDER_THRESHOLD_MINUTES):
                     last_reminded_key = f"last_reminded:{chat_id}:{task['time_iso']}"
                     last_reminded_ts_str = kv.get(last_reminded_key)
                     last_reminded_ts = float(last_reminded_ts_str) if last_reminded_ts_str else 0
-                    if (datetime.now().timestamp() - last_reminded_ts) > 270:
+                    
+                    if (datetime.now().timestamp() - last_reminded_ts) > 270: # Chỉ nhắc lại sau 4.5 phút
                         minutes_left = int(time_until_due.total_seconds() / 60)
+                        
+                        # Mặc định là tin nhắn nhắc nhở thông thường
                         reminder_text = f"‼️ *ANH NHẮC EM* ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
+
+                        # Nếu là lịch Alpha, tạo tin nhắn đặc biệt
+                        if task.get("type") == "alpha":
+                            price_info = get_price_by_contract(task['contract'])
+                            if price_info:
+                                price, _ = price_info
+                                value = price * task['amount']
+                                reminder_text = (
+                                    f"‼️ *ANH NHẮC EM* ‼️\n\n"
+                                    f"Sự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa.\n\n"
+                                    f"Exch. price: `${price:,.4f}`\n"
+                                    f"Value ≈ `${value:,.2f}` (.ref)"
+                                )
+
                         sent_message_id = send_telegram_message(chat_id, text=reminder_text)
-                        if sent_message_id: pin_telegram_message(chat_id, sent_message_id)
+                        if sent_message_id:
+                            pin_telegram_message(chat_id, sent_message_id)
+                        
                         kv.set(last_reminded_key, datetime.now().timestamp(), ex=3600)
                         reminders_sent += 1
             else:
-                tasks_changed = True
+                tasks_changed = True # Đánh dấu có sự thay đổi vì có task đã hết hạn
+
         if tasks_changed:
             kv.set(key, json.dumps(active_tasks_after_check))
+
     result = {"status": "success", "reminders_sent": reminders_sent}
     print(result)
     return jsonify(result)
-
 @app.route('/check_alerts', methods=['POST'])
 def alert_cron_webhook():
     if not kv or not BOT_TOKEN or not CRON_SECRET: return jsonify(error="Server not configured"), 500
