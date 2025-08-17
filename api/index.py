@@ -130,6 +130,20 @@ def list_tasks(chat_id) -> str:
     return "\n".join(result_lines)
 
 # --- LOGIC CRYPTO & TIỆN ÍCH BOT ---
+def get_price_by_contract(address: str) -> tuple[float, str] | None:
+    """Hàm phụ trợ để lấy giá và mạng của token từ địa chỉ contract."""
+    for network in AUTO_SEARCH_NETWORKS:
+        url = f"https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{address}"
+        try:
+            res = requests.get(url, headers={"accept": "application/json"}, timeout=10)
+            if res.status_code == 200:
+                data = res.json().get('data', {}).get('attributes', {})
+                price_str = data.get('price_usd')
+                if price_str:
+                    return (float(price_str), network)
+        except requests.RequestException:
+            continue
+    return None
 def get_price_by_symbol(symbol: str) -> float | None:
     coin_id = SYMBOL_TO_ID_MAP.get(symbol.lower(), symbol.lower())
     url = "https://api.coingecko.com/api/v3/simple/price"; params = {'ids': coin_id, 'vs_currencies': 'usd'}
