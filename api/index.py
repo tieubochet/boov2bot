@@ -111,7 +111,8 @@ def edit_task(chat_id, index_str: str, new_task_string: str) -> tuple[bool, str]
         return False, "❌ Số thứ tự không hợp lệ."
 
     user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
-    active_tasks = [t for t in user_tasks if datetime.fromisoformat(t['time_iso']) > datetime.now(TIMEZONE)]
+    now = datetime.now(TIMEZONE)
+    active_tasks = [t for t in user_tasks if datetime.fromisoformat(t['time_iso']) > now]
 
     if task_index >= len(active_tasks):
         return False, "❌ Số thứ tự không hợp lệ."
@@ -119,14 +120,11 @@ def edit_task(chat_id, index_str: str, new_task_string: str) -> tuple[bool, str]
     # Xác định công việc cần sửa và loại của nó
     task_to_edit_ref = active_tasks[task_index]
     task_type = task_to_edit_ref.get("type", "simple")
-    task_to_edit_iso = task_to_edit_ref['time_iso']
 
-    # Tìm công việc gốc trong danh sách đầy đủ để cập nhật
-    original_task = next((task for task in user_tasks if task['time_iso'] == task_to_edit_iso), None)
-    if not original_task:
-        return False, "❌ Lỗi: Không tìm thấy công việc gốc để sửa."
+    # Xóa công việc cũ khỏi danh sách đầy đủ
+    user_tasks = [t for t in user_tasks if t['time_iso'] != task_to_edit_ref['time_iso']]
 
-    # Xử lý dựa trên loại công việc
+    # Xử lý và tạo công việc mới dựa trên loại
     if task_type == "alpha":
         try:
             parts = new_task_string.split(' - ', 2)
@@ -148,11 +146,14 @@ def edit_task(chat_id, index_str: str, new_task_string: str) -> tuple[bool, str]
             if initial_price is None:
                 return False, f"❌ Không tìm thấy token với contract `{contract[:10]}...` trên mạng BSC."
 
-            # Cập nhật công việc alpha
-            original_task['time_iso'] = new_task_dt.isoformat()
-            original_task['name'] = event_name
-            original_task['amount'] = amount
-            original_task['contract'] = contract
+            # Thêm lại công việc alpha đã được cập nhật
+            user_tasks.append({
+                "type": "alpha",
+                "time_iso": new_task_dt.isoformat(),
+                "name": event_name,
+                "amount": amount,
+                "contract": contract
+            })
             
         except (ValueError, IndexError):
             return False, "❌ Cú pháp sai. Dùng: `DD/MM HH:mm - Tên sự kiện - 'số lượng' 'contract'`."
@@ -162,10 +163,14 @@ def edit_task(chat_id, index_str: str, new_task_string: str) -> tuple[bool, str]
         if not new_task_dt or not new_name_part:
             return False, "❌ Cú pháp sai. Dùng: `DD/MM HH:mm - Tên công việc`."
         
-        # Cập nhật công việc simple
-        original_task['time_iso'] = new_task_dt.isoformat()
-        original_task['name'] = new_name_part
+        # Thêm lại công việc simple đã được cập nhật
+        user_tasks.append({
+            "type": "simple",
+            "time_iso": new_task_dt.isoformat(),
+            "name": new_name_part
+        })
 
+    # Sắp xếp lại danh sách và lưu vào Redis
     user_tasks.sort(key=lambda x: x['time_iso'])
     kv.set(f"tasks:{chat_id}", json.dumps(user_tasks))
     
@@ -664,7 +669,7 @@ def cron_webhook():
                                     f"‼️ *ANH NHẮC EM* ‼️\n\n"
                                     f"Sự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa.\n\n"
                                     f"Giá token: `${price:,.4f}`\n"
-                                    f"Tổng ≈ `${value:,.2f}` (.ref)"
+                                    f"Tổng ≈ `${value:,.2f}`"
                                 )
                         
                         sent_message_id = send_telegram_message(chat_id, text=reminder_text)
