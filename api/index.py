@@ -133,7 +133,7 @@ def list_tasks(chat_id) -> str:
 def get_price_by_contract(address: str) -> tuple[float, str] | None:
     """Hàm phụ trợ để lấy giá và mạng của token từ địa chỉ contract."""
     for network in AUTO_SEARCH_NETWORKS:
-        url = f"https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{address}"
+        url = f"https://api.geckoterminal.com/api/v2/networks/bsc/tokens/{address}"
         try:
             res = requests.get(url, headers={"accept": "application/json"}, timeout=10)
             if res.status_code == 200:
