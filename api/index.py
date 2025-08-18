@@ -77,13 +77,13 @@ def add_alpha_task(chat_id, task_string: str) -> tuple[bool, str]:
         amount_str, contract = token_info
         amount = float(amount_str)
         
-        if not is_evm_address(contract): # Chỉ chấp nhận địa chỉ EVM cho BSC
-            return False, f"❌ Địa chỉ contract BSC không hợp lệ: `{contract}`"
+        if not is_crypto_address(contract):
+            return False, f"❌ Địa chỉ contract không hợp lệ: `{contract}`"
             
-        # <<< THAY ĐỔI: Kiểm tra giá ngay khi đặt lịch >>>
-        initial_price = get_bsc_price_by_contract(contract)
-        if initial_price is None:
-            return False, f"❌ Không tìm thấy token với contract `{contract[:10]}...` trên mạng BSC."
+        # Kiểm tra sự tồn tại của token ngay khi đặt lịch bằng GeckoTerminal
+        token_details = get_token_details_by_contract(contract)
+        if not token_details:
+            return False, f"❌ Không tìm thấy token với contract `{contract[:10]}...` trên các mạng được hỗ trợ."
             
     except (ValueError, IndexError):
         return False, "❌ Cú pháp sai. Dùng: `/alpha DD/MM HH:mm - Tên sự kiện - 'số lượng' 'contract'`."
