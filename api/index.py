@@ -365,22 +365,11 @@ def list_price_alerts(chat_id) -> str:
         )
         
     return "\n".join(message_parts)
-def get_price_by_contract(address: str) -> dict | None:
+def get_token_details_by_contract(address: str) -> dict | None:
     """
-    Hàm phụ trợ để lấy thông tin chi tiết của token từ địa chỉ contract.
-    Kết hợp GeckoTerminal và CoinGecko để có dữ liệu tốt nhất.
+    Hàm phụ trợ để lấy thông tin chi tiết của token (giá, mạng, symbol, name)
+    từ địa chỉ contract bằng cách quét các mạng trên GeckoTerminal.
     """
-    # Bản đồ chuyển đổi network sang platform_id của CoinGecko
-    network_to_platform_id = {
-        'eth': 'ethereum',
-        'bsc': 'binance-smart-chain',
-        'polygon': 'polygon-pos',
-        'arbitrum': 'arbitrum-one',
-        'base': 'base',
-        'tron': 'tron'
-    }
-    
-    # Plan A: Thử lấy dữ liệu đầy đủ từ GeckoTerminal
     for network in AUTO_SEARCH_NETWORKS:
         url = f"https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{address}"
         try:
@@ -388,30 +377,13 @@ def get_price_by_contract(address: str) -> dict | None:
             if res.status_code == 200:
                 data = res.json().get('data', {}).get('attributes', {})
                 price_str = data.get('price_usd')
-                symbol = data.get('symbol')
-                name = data.get('name')
-
-                if price_str and name:
-                    # Nếu symbol bị thiếu, chuyển sang Plan B
-                    if not symbol:
-                        platform_id = network_to_platform_id.get(network)
-                        if platform_id:
-                            print(f"Symbol for {address} is missing on GeckoTerminal, falling back to CoinGecko...")
-                            cg_url = f"https://api.coingecko.com/api/v3/coins/{platform_id}/contract/{address.lower()}"
-                            try:
-                                res_cg = requests.get(cg_url, timeout=10)
-                                if res_cg.status_code == 200:
-                                    symbol = res_cg.json().get('symbol', 'N/A').upper()
-                            except requests.RequestException:
-                                symbol = 'N/A' # Nếu CoinGecko cũng lỗi, dùng N/A
-                        else:
-                            symbol = 'N/A'
-                    
+                # Chỉ trả về dữ liệu nếu có giá
+                if price_str:
                     return {
                         "price": float(price_str),
                         "network": network,
-                        "symbol": symbol.upper(),
-                        "name": name
+                        "symbol": data.get('symbol', 'N/A'),
+                        "name": data.get('name', address[:10] + '...') # Tên mặc định là địa chỉ rút gọn
                     }
         except requests.RequestException:
             continue
