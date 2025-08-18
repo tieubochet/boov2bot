@@ -644,14 +644,15 @@ def cron_webhook():
                         reminder_text = f"‼️ *ANH NHẮC EM* ‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
 
                         if task.get("type") == "alpha":
-                            # <<< THAY ĐỔI: Gọi hàm lấy giá BSC mới >>>
-                            price = get_bsc_price_by_contract(task['contract'])
-                            if price is not None:
+                            # <<< THAY ĐỔI: Gọi hàm lấy giá GeckoTerminal >>>
+                            token_details = get_token_details_by_contract(task['contract'])
+                            if token_details:
+                                price = token_details['price']
                                 value = price * task['amount']
                                 reminder_text = (
                                     f"‼️ *ANH NHẮC EM* ‼️\n\n"
                                     f"Sự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa.\n\n"
-                                    f"Giá token: `${price:,.4f}`\n"
+                                    f"Giá token: `${price:,.6f}`\n" # Thêm số thập phân
                                     f"Tổng ≈ `${value:,.2f}`"
                                 )
                         
