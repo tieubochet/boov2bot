@@ -491,13 +491,24 @@ def find_token_across_networks(address: str) -> str:
         try:
             res = requests.get(url, headers={"accept": "application/json"}, timeout=10)
             if res.status_code == 200:
-                data = res.json(); token_attr = data.get('data', {}).get('attributes', {})
-                price = float(token_attr.get('price_usd', 0)); change = float(token_attr.get('price_change_percentage', {}).get('h24', 0))
+                data = res.json()
+                token_attr = data.get('data', {}).get('attributes', {})
+                if not token_attr: continue
+
+                # --- SỬA LỖI ---
+                # Xử lý an toàn các giá trị có thể là None
+                price_str = token_attr.get('price_usd')
+                price = float(price_str) if price_str is not None else 0.0
+                
+                change_pct_str = token_attr.get('price_change_percentage', {}).get('h24')
+                change = float(change_pct_str) if change_pct_str is not None else 0.0
+
                 return (f"✅ *Tìm thấy trên mạng {network.upper()}*\n"
                         f"*{token_attr.get('name', 'N/A')} ({token_attr.get('symbol', 'N/A')})*\n\n"
                         f"Giá: *${price:,.8f}*\n24h: *{'📈' if change >= 0 else '📉'} {change:+.2f}%*\n\n"
                         f"🔗 [Xem trên GeckoTerminal](https://www.geckoterminal.com/{network}/tokens/{address})\n\n`{address}`")
-        except requests.RequestException: continue
+        except requests.RequestException:
+            continue
     return f"❌ Không tìm thấy token với địa chỉ `{address[:10]}...`."
 def process_portfolio_text(message_text: str) -> str | None:
     lines = message_text.strip().split('\n'); total_value, result_lines, valid_lines_count = 0.0, [], 0
