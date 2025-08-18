@@ -80,7 +80,7 @@ def add_alpha_task(chat_id, task_string: str) -> tuple[bool, str]:
         if not is_crypto_address(contract):
             return False, f"❌ Địa chỉ contract không hợp lệ: `{contract}`"
             
-        # Kiểm tra sự tồn tại của token ngay khi đặt lịch bằng GeckoTerminal
+        # Kiểm tra sự tồn tại của token, không cần quan tâm giá ban đầu
         token_details = get_token_details_by_contract(contract)
         if not token_details:
             return False, f"❌ Không tìm thấy token với contract `{contract[:10]}...` trên các mạng được hỗ trợ."
@@ -369,6 +369,7 @@ def get_token_details_by_contract(address: str) -> dict | None:
     """
     Hàm phụ trợ để lấy thông tin chi tiết của token (giá, mạng, symbol, name)
     từ địa chỉ contract bằng cách quét các mạng trên GeckoTerminal.
+    Sẽ trả về thông tin ngay cả khi giá là 0.
     """
     for network in AUTO_SEARCH_NETWORKS:
         url = f"https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{address}"
@@ -376,14 +377,18 @@ def get_token_details_by_contract(address: str) -> dict | None:
             res = requests.get(url, headers={"accept": "application/json"}, timeout=10)
             if res.status_code == 200:
                 data = res.json().get('data', {}).get('attributes', {})
-                price_str = data.get('price_usd')
-                # Chỉ trả về dữ liệu nếu có giá
-                if price_str:
+                name = data.get('name')
+                
+                # Chỉ cần có tên là coi như tìm thấy token
+                if name:
+                    price_str = data.get('price_usd')
+                    price = float(price_str) if price_str is not None else 0.0
+                    
                     return {
-                        "price": float(price_str),
+                        "price": price,
                         "network": network,
                         "symbol": data.get('symbol', 'N/A'),
-                        "name": data.get('name', address[:10] + '...') # Tên mặc định là địa chỉ rút gọn
+                        "name": name
                     }
         except requests.RequestException:
             continue
