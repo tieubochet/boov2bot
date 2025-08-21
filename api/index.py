@@ -557,7 +557,7 @@ def webhook():
             start_message = ("Gòi, cần gì fen?\n\n"
                              "**Chức năng Lịch hẹn:**\n"
                              "`/add DD/MM HH:mm - Tên`\n"
-                             "`/list`, `/edit <số> ...`\n\n"
+                             "`/list`, `/del <số>`, `/edit <số> ...`\n\n"
                              "**Chức năng Crypto:**\n"
                              "`/alpha time - tên event - amount contract`\n"
                              "**Ví dụ: /alpha 20/08 22:00 - Alpha: GAME - 132 0x825459139c897d769339f295e962396c4f9e4a4d**\n"
