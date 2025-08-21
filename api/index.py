@@ -574,17 +574,32 @@ def webhook():
                              "Cú pháp: <số lượng> <contract> <chain>\n"
                              "Ví dụ: 20000 0x825459139c897d769339f295e962396c4f9e4a4d bsc")
             send_telegram_message(chat_id, text=start_message)
-        elif cmd in ['/add', '/edit']:
+                # Sửa dòng này để bao gồm /del
+        elif cmd in ['/add', '/edit', '/del']:
             success = False; message = ""
-            if cmd == '/add': success, message = add_task(chat_id, " ".join(parts[1:]))
+            if cmd == '/add':
+                success, message = add_task(chat_id, " ".join(parts[1:]))
+            
+            # Thêm lại khối elif này
+            elif cmd == '/del':
+                if len(parts) > 1:
+                    success, message = delete_task(chat_id, parts[1])
+                else:
+                    message = "Cú pháp: `/del <số>`"
+
             elif cmd == '/edit':
-                if len(parts) < 3: message = "Cú pháp: `/edit <số> DD/MM HH:mm - Tên mới`"
-                else: success, message = edit_task(chat_id, parts[1], " ".join(parts[2:]))
+                if len(parts) < 3:
+                    message = "Cú pháp: `/edit <số> DD/MM HH:mm - Tên mới`"
+                else:
+                    success, message = edit_task(chat_id, parts[1], " ".join(parts[2:]))
+            
             if success:
                 temp_msg_id = send_telegram_message(chat_id, text=message, reply_to_message_id=msg_id)
                 send_telegram_message(chat_id, text=list_tasks(chat_id))
-                if temp_msg_id: delete_telegram_message(chat_id, temp_msg_id)
-            else: send_telegram_message(chat_id, text=message, reply_to_message_id=msg_id)
+                if temp_msg_id:
+                    delete_telegram_message(chat_id, temp_msg_id)
+            else:
+                send_telegram_message(chat_id, text=message, reply_to_message_id=msg_id)
         elif cmd == '/list': send_telegram_message(chat_id, text=list_tasks(chat_id), reply_to_message_id=msg_id)
         elif cmd == '/gia':
             if len(parts) < 2: send_telegram_message(chat_id, text="Cú pháp: `/gia <ký hiệu>`", reply_to_message_id=msg_id)
