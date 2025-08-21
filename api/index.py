@@ -175,6 +175,33 @@ def edit_task(chat_id, index_str: str, new_task_string: str) -> tuple[bool, str]
     kv.set(f"tasks:{chat_id}", json.dumps(user_tasks))
     
     return True, f"✅ Đã sửa công việc số *{task_index + 1}*."
+def delete_task(chat_id, task_index_str: str) -> tuple[bool, str]:
+    """Xóa một công việc theo số thứ tự hiển thị trong /list."""
+    if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
+    
+    try:
+        task_index = int(task_index_str) - 1 # Chuyển từ 1-based sang 0-based
+        if task_index < 0: raise ValueError
+    except (ValueError, AssertionError):
+        return False, "❌ Số thứ tự không hợp lệ."
+
+    user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
+    # Lấy danh sách các công việc đang hoạt động (những gì người dùng thấy)
+    active_tasks = [t for t in user_tasks if datetime.fromisoformat(t['time_iso']) > datetime.now(TIMEZONE)]
+
+    # Kiểm tra xem chỉ mục có hợp lệ với danh sách đang hoạt động không
+    if task_index >= len(active_tasks):
+        return False, "❌ Số thứ tự không hợp lệ."
+
+    # Xác định công việc cần xóa dựa trên danh sách đang hoạt động
+    task_to_delete = active_tasks[task_index]
+    
+    # Tạo danh sách mới bằng cách loại bỏ công việc đã xác định
+    updated_tasks = [t for t in user_tasks if t['time_iso'] != task_to_delete['time_iso']]
+    
+    kv.set(f"tasks:{chat_id}", json.dumps(updated_tasks))
+    
+    return True, f"✅ Đã xóa lịch hẹn: *{task_to_delete['name']}*"
 def list_tasks(chat_id) -> str:
     if not kv: return "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
     user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
