@@ -21,7 +21,7 @@ SYMBOL_TO_ID_MAP = {
     'sui': 'sui', 'dev': 'scout-protocol-token', 'hype':'hyperliquid', 'link': 'chainlink',
     'ondo':'ondo-finance', 'virtual':'virtual-protocol', 'trx':'tron', 'towns':'towns',
     'in': 'infinit', 'yala': 'yala', 'vra':'verasity', 'tipn':'tipn', 'era':'caldera',
-    'talent':'talent-protocol'
+    'talent':'talent-protocol', 'bas':'bas'
 }
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
