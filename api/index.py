@@ -215,6 +215,65 @@ def list_tasks(chat_id) -> str:
     return "\n".join(result_lines)
 
 # --- LOGIC CRYPTO & TIỆN ÍCH BOT ---
+def get_binance_futures_price(symbol: str) -> float | None:
+    """Lấy giá gần nhất của một token từ Binance Futures."""
+    trading_pair = f"{symbol.upper()}USDT"
+    # API của Binance Futures có endpoint khác
+    url = f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={trading_pair}"
+    try:
+        res = requests.get(url, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            return float(data.get('price'))
+        return None
+    except (requests.RequestException, ValueError, KeyError):
+        return None
+def process_folio_text(message_text: str) -> str:
+    """Xử lý và tính toán giá trị portfolio từ Binance Futures."""
+    lines = message_text.strip().split('\n')
+    total_value = 0.0
+    result_lines = []
+    
+    # Bỏ qua dòng lệnh đầu tiên nếu có (ví dụ: /folio)
+    if lines and lines[0].lower().startswith('/folio'):
+        # Nếu dòng đầu chỉ có /folio, bỏ qua nó
+        if len(lines[0].split()) == 1:
+            lines = lines[1:]
+        # Nếu dòng đầu có dạng /folio 0.5 btc, xử lý nó
+        else:
+            lines[0] = lines[0].split(maxsplit=1)[1]
+
+    if not lines or all(not line.strip() for line in lines):
+        return "Cú pháp: `/folio` sau đó xuống dòng nhập danh sách.\nVí dụ:\n`/folio\n0.5 btc\n10 eth`"
+
+    for i, line in enumerate(lines):
+        line = line.strip()
+        if not line: continue
+
+        parts = line.split()
+        if len(parts) != 2:
+            result_lines.append(f"Dòng {i+1}: ❌ Cú pháp sai. Cần: `<số lượng> <ký hiệu>`")
+            continue
+        
+        amount_str, symbol = parts
+        try:
+            amount = float(amount_str)
+        except ValueError:
+            result_lines.append(f"Dòng {i+1}: ❌ Số lượng không hợp lệ: `{amount_str}`")
+            continue
+            
+        price = get_binance_futures_price(symbol)
+        if price is not None:
+            value = amount * price
+            total_value += value
+            result_lines.append(f"*{symbol.upper()}*: `${price:,.4f}` x {amount_str} = *${value:,.2f}*")
+        else:
+            result_lines.append(f"❌ Không tìm thấy giá *{symbol.upper()}* trên Binance Futures.")
+            
+    final_result_text = "\n".join(result_lines)
+    summary = f"\n--------------------\n*Tổng cộng (Binance Futures):* *${total_value:,.2f}*"
+    return final_result_text + summary
+
 def get_bsc_price_by_contract(address: str) -> float | None:
     """Hàm chuyên biệt chỉ lấy giá của token trên mạng BSC."""
     network = 'bsc'
@@ -571,9 +630,14 @@ def webhook():
                              "`/unalert <contract>`\n"
                              "`/alerts`\n\n"
                              "1️⃣ *Tra cứu Token theo Contract*\n"
-                             "2️⃣ *Tính Portfolio*\n"
+                             "2️⃣ *Tính Portfolio (Event trade Alpha)*\n"
                              "Cú pháp: <số lượng> <contract> <chain>\n"
                              "Ví dụ: 20000 0x825459139c897d769339f295e962396c4f9e4a4d bsc")
+                             "2️⃣ *Tính Portfolio (Giá Binance Futures)*\n" # Thêm hướng dẫn
+                             "Gõ `/folio` và xuống dòng nhập danh sách:\n"
+                             "`<số lượng> <ký hiệu>`\n"
+                             "_Ví dụ:_\n"
+                             "```\n/folio\n0.5 btc\n10 eth\n```"
             send_telegram_message(chat_id, text=start_message)
                 # Sửa dòng này để bao gồm /del
         elif cmd in ['/add', '/edit', '/del']:
@@ -622,6 +686,10 @@ def webhook():
                 text_to_translate = " ".join(parts[1:])
                 temp_msg_id = send_telegram_message(chat_id, text="⏳ Đang dịch, đợi tí fen...", reply_to_message_id=msg_id)
                 if temp_msg_id: edit_telegram_message(chat_id, temp_msg_id, text=translate_crypto_text(text_to_translate))
+        elif cmd == '/folio':
+            # Hàm process_folio_text giờ sẽ xử lý toàn bộ tin nhắn
+            result = process_folio_text(text)
+            send_telegram_message(chat_id, text=result, reply_to_message_id=msg_id)
         elif cmd == '/alpha':
             success, message = add_alpha_task(chat_id, " ".join(parts[1:]))
             if success:
