@@ -215,33 +215,46 @@ def list_tasks(chat_id) -> str:
     return "\n".join(result_lines)
 
 # --- LOGIC CRYPTO & TIỆN ÍCH BOT ---
-def get_binance_futures_price(symbol: str) -> float | None:
-    """Lấy giá gần nhất của một token từ Binance Futures."""
-    trading_pair = f"{symbol.upper()}USDT"
-    # API của Binance Futures có endpoint khác
-    url = f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={trading_pair}"
+def get_all_binance_futures_prices() -> dict | None:
+    """Lấy giá của TẤT CẢ các cặp giao dịch trên Binance Futures."""
+    url = "https://fapi.binance.com/fapi/v1/ticker/price"
     try:
-        res = requests.get(url, timeout=10)
+        res = requests.get(url, timeout=15)
         if res.status_code == 200:
-            data = res.json()
-            return float(data.get('price'))
+            # Chuyển danh sách thành một dictionary để tra cứu nhanh: {'BTCUSDT': '69000.00', ...}
+            return {item['symbol']: float(item['price']) for item in res.json()}
         return None
-    except (requests.RequestException, ValueError, KeyError):
+    except (requests.RequestException, ValueError, KeyError) as e:
+        print(f"Error fetching all Binance prices: {e}")
         return None
+
 def process_folio_text(message_text: str) -> str:
     """Xử lý và tính toán giá trị portfolio từ Binance Futures."""
+    if not kv: return "Lỗi: Chức năng portfolio không khả dụng do không kết nối được DB."
+    
+    # --- Logic Lấy Giá và Caching ---
+    prices = None
+    cached_prices_json = kv.get("binance_prices_cache")
+    if cached_prices_json:
+        prices = json.loads(cached_prices_json)
+    
+    if not prices:
+        print("Cache miss. Fetching all prices from Binance API...")
+        prices = get_all_binance_futures_prices()
+        if prices:
+            # Lưu vào cache với thời gian hết hạn 15 giây
+            kv.set("binance_prices_cache", json.dumps(prices), ex=15)
+        else:
+            return "❌ Không thể lấy dữ liệu giá từ Binance Futures. Vui lòng thử lại sau."
+    # --- Kết thúc Logic Caching ---
+
     lines = message_text.strip().split('\n')
     total_value = 0.0
     result_lines = []
     
-    # Bỏ qua dòng lệnh đầu tiên nếu có (ví dụ: /folio)
     if lines and lines[0].lower().startswith('/folio'):
-        # Nếu dòng đầu chỉ có /folio, bỏ qua nó
-        if len(lines[0].split()) == 1:
-            lines = lines[1:]
-        # Nếu dòng đầu có dạng /folio 0.5 btc, xử lý nó
-        else:
-            lines[0] = lines[0].split(maxsplit=1)[1]
+        if len(lines[0].split()) == 1: lines = lines[1:]
+        else: lines[0] = lines[0].split(maxsplit=1)[1]
 
     if not lines or all(not line.strip() for line in lines):
         return "Cú pháp: `/folio` sau đó xuống dòng nhập danh sách.\nVí dụ:\n`/folio\n0.5 btc\n10 eth`"
@@ -262,13 +275,15 @@ def process_folio_text(message_text: str) -> str:
             result_lines.append(f"Dòng {i+1}: ❌ Số lượng không hợp lệ: `{amount_str}`")
             continue
             
-        price = get_binance_futures_price(symbol)
+        trading_pair = f"{symbol.upper()}USDT"
+        price = prices.get(trading_pair) # Tra cứu giá từ dictionary đã lấy về
+        
         if price is not None:
             value = amount * price
             total_value += value
             result_lines.append(f"*{symbol.upper()}*: `${price:,.4f}` x {amount_str} = *${value:,.2f}*")
         else:
-            result_lines.append(f"❌ Không tìm thấy giá *{symbol.upper()}* trên Binance Futures.")
+            result_lines.append(f"❌ Không tìm thấy cặp *{trading_pair}* trên Binance Futures.")
             
     final_result_text = "\n".join(result_lines)
     summary = f"\n--------------------\n*Tổng cộng (Binance Futures):* *${total_value:,.2f}*"
