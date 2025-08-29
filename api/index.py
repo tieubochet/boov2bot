@@ -249,33 +249,35 @@ def get_coingecko_prices_by_symbols(symbols: list[str]) -> dict | None:
         return None
 
 ### <<< THAY THẾ HÀM process_folio_text CŨ BẰNG HÀM MỚI NÀY ###
-def process_folio_text(message_text: str) -> str:
-    """Xử lý và tính toán giá trị portfolio từ CoinGecko."""
-    lines = message_text.strip().split('\n')
+def process_symbol_portfolio(message_text: str) -> str:
+    """Xử lý và tính toán giá trị portfolio từ một dòng lệnh duy nhất."""
+    if not kv: return "Lỗi: Chức năng portfolio không khả dụng do không kết nối được DB."
     
-    if lines and lines[0].lower().startswith('/folio'):
-        if len(lines[0].split()) == 1: lines = lines[1:]
-        else: lines[0] = lines[0].split(maxsplit=1)[1]
+    parts = message_text.strip().split()
+    # Lấy các phần tử sau lệnh /folio
+    data_parts = parts[1:]
 
-    if not lines or all(not line.strip() for line in lines):
-        return "Cú pháp: `/folio` sau đó xuống dòng nhập danh sách.\nVí dụ:\n`/folio\n0.5 btc\n10 eth`"
+    if not data_parts:
+        return "Cú pháp: `/folio <ký hiệu 1> <số lượng 1> <ký hiệu 2> <số lượng 2> ...`\nVí dụ: `/folio btc 0.5 eth 10`"
+    
+    # Dữ liệu phải luôn là một cặp (ký hiệu, số lượng)
+    if len(data_parts) % 2 != 0:
+        return "❌ Cú pháp sai. Dữ liệu phải theo cặp `ký hiệu số lượng`."
 
     # Bước 1: Thu thập tất cả các token và số lượng từ input
     portfolio_items = []
     symbols_to_fetch = set()
-    for i, line in enumerate(lines):
-        line = line.strip()
-        if not line: continue
-        parts = line.split()
-        if len(parts) != 2: continue
-        
-        amount_str, symbol = parts
+    
+    # Lặp qua danh sách theo từng cặp
+    for i in range(0, len(data_parts), 2):
+        symbol = data_parts[i]
+        amount_str = data_parts[i+1]
         try:
             amount = float(amount_str)
-            portfolio_items.append({'amount': amount, 'symbol': symbol, 'line_num': i + 1})
+            portfolio_items.append({'amount': amount, 'symbol': symbol})
             symbols_to_fetch.add(symbol)
         except ValueError:
-            portfolio_items.append({'error': f"Số lượng không hợp lệ: `{amount_str}`", 'line_num': i + 1})
+            portfolio_items.append({'error': f"Số lượng không hợp lệ cho {symbol.upper()}: `{amount_str}`"})
 
     # Bước 2: Gọi API một lần duy nhất để lấy tất cả giá
     prices = get_coingecko_prices_by_symbols(list(symbols_to_fetch))
@@ -288,7 +290,7 @@ def process_folio_text(message_text: str) -> str:
     
     for item in portfolio_items:
         if 'error' in item:
-            result_lines.append(f"Dòng {item['line_num']}: ❌ {item['error']}")
+            result_lines.append(f"❌ {item['error']}")
             continue
             
         symbol = item['symbol']
@@ -303,7 +305,7 @@ def process_folio_text(message_text: str) -> str:
             result_lines.append(f"❌ Không tìm thấy giá cho *{symbol.upper()}* trên CoinGecko.")
             
     final_result_text = "\n".join(result_lines)
-    summary = f"\n--------------------\n*Tổng cộng (CoinGecko):* *${total_value:,.2f}*"
+    summary = f"\n--------------------\n*Tổng cộng:* *${total_value:,.2f}*"
     return final_result_text + summary
 
 def get_bsc_price_by_contract(address: str) -> float | None:
@@ -666,10 +668,9 @@ def webhook():
                              "Cú pháp: <số lượng> <contract> <chain>\n"
                              "Ví dụ: 20000 0x825459139c897d769339f295e962396c4f9e4a4d bsc"
                              "2️⃣ *Tính Portfolio (Giá Binance Futures)*\n" # Thêm hướng dẫn
-                             "Gõ `/folio` và xuống dòng nhập danh sách:\n"
-                             "`<số lượng> <ký hiệu>`\n"
+                             "Cú pháp: `/folio <k/h 1> <sl 1> <k/h 2> <sl 2>...`\n" # <<< SỬA DÒNG NÀY
                              "_Ví dụ:_\n"
-                             "```\n/folio\n0.5 btc\n10 eth\n```")
+                             "`/folio btc 0.5 eth 10`")
             send_telegram_message(chat_id, text=start_message)
                 # Sửa dòng này để bao gồm /del
         elif cmd in ['/add', '/edit', '/del']:
