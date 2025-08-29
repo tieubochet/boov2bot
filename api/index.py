@@ -215,42 +215,43 @@ def list_tasks(chat_id) -> str:
     return "\n".join(result_lines)
 
 # --- LOGIC CRYPTO & TIỆN ÍCH BOT ---
-def get_all_binance_futures_prices() -> dict | None:
-    """Lấy giá của TẤT CẢ các cặp giao dịch trên Binance Futures."""
-    url = "https://fapi.binance.com/fapi/v1/ticker/price"
+def get_coingecko_prices_by_symbols(symbols: list[str]) -> dict | None:
+    """Lấy giá của một danh sách các token từ CoinGecko bằng ký hiệu."""
+    if not symbols:
+        return {}
+        
+    # Chuyển đổi ký hiệu (btc, eth) sang id (bitcoin, ethereum) mà CoinGecko hiểu
+    ids_to_fetch = [SYMBOL_TO_ID_MAP.get(s.lower(), s.lower()) for s in symbols]
+    ids_string = ",".join(ids_to_fetch)
+    
+    url = f"https://api.coingecko.com/api/v3/simple/price"
+    params = {'ids': ids_string, 'vs_currencies': 'usd'}
+    
     try:
-        res = requests.get(url, timeout=15)
+        res = requests.get(url, params=params, timeout=15)
         if res.status_code == 200:
-            # Chuyển danh sách thành một dictionary để tra cứu nhanh: {'BTCUSDT': '69000.00', ...}
-            return {item['symbol']: float(item['price']) for item in res.json()}
-        return None
-    except (requests.RequestException, ValueError, KeyError) as e:
-        print(f"Error fetching all Binance prices: {e}")
-        return None
-
-def process_folio_text(message_text: str) -> str:
-    """Xử lý và tính toán giá trị portfolio từ Binance Futures."""
-    if not kv: return "Lỗi: Chức năng portfolio không khả dụng do không kết nối được DB."
-    
-    # --- Logic Lấy Giá và Caching ---
-    prices = None
-    cached_prices_json = kv.get("binance_prices_cache")
-    if cached_prices_json:
-        prices = json.loads(cached_prices_json)
-    
-    if not prices:
-        print("Cache miss. Fetching all prices from Binance API...")
-        prices = get_all_binance_futures_prices()
-        if prices:
-            # Lưu vào cache với thời gian hết hạn 15 giây
-            kv.set("binance_prices_cache", json.dumps(prices), ex=15)
+            data = res.json()
+            # Xây dựng lại bản đồ từ symbol sang giá để dễ tra cứu
+            price_map = {}
+            # Tạo một map ngược từ id về symbol để trả về đúng định dạng
+            id_to_symbol_map = {v: k for k, v in SYMBOL_TO_ID_MAP.items()}
+            
+            for coin_id, price_data in data.items():
+                # Ưu tiên tìm lại symbol gốc, nếu không có thì dùng chính id
+                symbol = id_to_symbol_map.get(coin_id, coin_id)
+                price_map[symbol.lower()] = price_data.get('usd', 0)
+            return price_map
         else:
-            return "❌ Không thể lấy dữ liệu giá từ Binance Futures. Vui lòng thử lại sau."
-    # --- Kết thúc Logic Caching ---
+            print(f"CoinGecko price API error: {res.status_code} - {res.text}")
+            return None
+    except requests.RequestException as e:
+        print(f"Error fetching CoinGecko prices: {e}")
+        return None
 
+### <<< THAY THẾ HÀM process_folio_text CŨ BẰNG HÀM MỚI NÀY ###
+def process_folio_text(message_text: str) -> str:
+    """Xử lý và tính toán giá trị portfolio từ CoinGecko."""
     lines = message_text.strip().split('\n')
-    total_value = 0.0
-    result_lines = []
     
     if lines and lines[0].lower().startswith('/folio'):
         if len(lines[0].split()) == 1: lines = lines[1:]
@@ -259,34 +260,50 @@ def process_folio_text(message_text: str) -> str:
     if not lines or all(not line.strip() for line in lines):
         return "Cú pháp: `/folio` sau đó xuống dòng nhập danh sách.\nVí dụ:\n`/folio\n0.5 btc\n10 eth`"
 
+    # Bước 1: Thu thập tất cả các token và số lượng từ input
+    portfolio_items = []
+    symbols_to_fetch = set()
     for i, line in enumerate(lines):
         line = line.strip()
         if not line: continue
-
         parts = line.split()
-        if len(parts) != 2:
-            result_lines.append(f"Dòng {i+1}: ❌ Cú pháp sai. Cần: `<số lượng> <ký hiệu>`")
-            continue
+        if len(parts) != 2: continue
         
         amount_str, symbol = parts
         try:
             amount = float(amount_str)
+            portfolio_items.append({'amount': amount, 'symbol': symbol, 'line_num': i + 1})
+            symbols_to_fetch.add(symbol)
         except ValueError:
-            result_lines.append(f"Dòng {i+1}: ❌ Số lượng không hợp lệ: `{amount_str}`")
+            portfolio_items.append({'error': f"Số lượng không hợp lệ: `{amount_str}`", 'line_num': i + 1})
+
+    # Bước 2: Gọi API một lần duy nhất để lấy tất cả giá
+    prices = get_coingecko_prices_by_symbols(list(symbols_to_fetch))
+    if prices is None:
+        return "❌ Không thể lấy dữ liệu giá từ CoinGecko. Vui lòng thử lại sau."
+        
+    # Bước 3: Tính toán và định dạng kết quả
+    total_value = 0.0
+    result_lines = []
+    
+    for item in portfolio_items:
+        if 'error' in item:
+            result_lines.append(f"Dòng {item['line_num']}: ❌ {item['error']}")
             continue
             
-        trading_pair = f"{symbol.upper()}USDT"
-        price = prices.get(trading_pair) # Tra cứu giá từ dictionary đã lấy về
+        symbol = item['symbol']
+        amount = item['amount']
+        price = prices.get(symbol.lower())
         
         if price is not None:
             value = amount * price
             total_value += value
-            result_lines.append(f"*{symbol.upper()}*: `${price:,.4f}` x {amount_str} = *${value:,.2f}*")
+            result_lines.append(f"*{symbol.upper()}*: `${price:,.4f}` x {amount} = *${value:,.2f}*")
         else:
-            result_lines.append(f"❌ Không tìm thấy cặp *{trading_pair}* trên Binance Futures.")
+            result_lines.append(f"❌ Không tìm thấy giá cho *{symbol.upper()}* trên CoinGecko.")
             
     final_result_text = "\n".join(result_lines)
-    summary = f"\n--------------------\n*Tổng cộng (Binance Futures):* *${total_value:,.2f}*"
+    summary = f"\n--------------------\n*Tổng cộng (CoinGecko):* *${total_value:,.2f}*"
     return final_result_text + summary
 
 def get_bsc_price_by_contract(address: str) -> float | None:
