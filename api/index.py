@@ -40,12 +40,11 @@ try:
 except Exception as e:
     print(f"FATAL: Could not connect to Redis. Error: {e}"); kv = None
 # --- LOGIC QUẢN LÝ CÔNG VIỆC ---
-# --- XÓA HÀM get_airdrop_events CŨ VÀ DÁN TOÀN BỘ KHỐI CODE NÀY VÀO THAY THẾ ---
-
-def get_airdrop_events() -> str:
+def _get_processed_airdrop_events():
     """
-    Lấy và định dạng danh sách các sự kiện airdrop từ API,
-    áp dụng quy tắc +18 giờ cho các sự kiện Phase 2.
+    Hàm nội bộ: Lấy và xử lý dữ liệu airdrop, trả về danh sách các sự kiện
+    đã được lọc với thời gian hiệu lực đã được tính toán.
+    Đây là hàm logic cốt lõi.
     """
     AIRDROP_API_URL = "https://alpha123.uk/api/data?fresh=1"
     PRICE_API_URL = "https://alpha123.uk/api/price/?batch=today"
@@ -54,9 +53,7 @@ def get_airdrop_events() -> str:
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
 
-    # --- Các hàm phụ trợ ---
     def _get_price_data():
-        """Hàm phụ để lấy dữ liệu giá."""
         try:
             res = requests.get(PRICE_API_URL, headers=HEADERS, timeout=10)
             if res.status_code == 200:
@@ -67,9 +64,6 @@ def get_airdrop_events() -> str:
         return {}
 
     def _filter_and_deduplicate_events(events):
-        """
-        Lọc và gom nhóm các sự kiện trùng lặp, ưu tiên giữ lại sự kiện có 'phase' cao nhất.
-        """
         processed = {}
         for event in events:
             key = (event.get('date'), event.get('token'))
@@ -77,37 +71,51 @@ def get_airdrop_events() -> str:
                 processed[key] = event
         return list(processed.values())
 
-    # --- THAY ĐỔI LOGIC TÍNH TOÁN THỜI GIAN TẠI ĐÂY ---
     def _get_effective_event_time(event):
-        """
-        Trả về thời gian hiệu lực của sự kiện dưới dạng datetime object.
-        Áp dụng quy tắc +18 giờ cho phase 2.
-        Trả về None nếu không có thời gian cụ thể.
-        """
         event_date_str = event.get('date')
         event_time_str = event.get('time')
-
         if not (event_date_str and event_time_str and ':' in event_time_str):
             return None
-
         try:
             naive_dt = datetime.strptime(f"{event_date_str} {event_time_str}", '%Y-%m-%d %H:%M')
-            
-            # QUY TẮC NGHIỆP VỤ: Nếu là phase 2, cộng thêm 18 giờ
             if event.get('phase') == 2:
-                naive_dt += timedelta(hours=17)
-            
+                naive_dt += timedelta(hours=18)
             return TIMEZONE.localize(naive_dt)
         except (ValueError, pytz.exceptions.PytzError):
             return None
 
-    def _format_event_message(event, price_data, effective_dt):
-        """Định dạng tin nhắn cho một sự kiện."""
-        token = event.get('token', 'N/A')
-        name = event.get('name', 'N/A')
-        points = event.get('points') or '-'
-        amount_str = event.get('amount') or '-'
+    try:
+        airdrop_res = requests.get(AIRDROP_API_URL, headers=HEADERS, timeout=20)
+        if airdrop_res.status_code != 200: return None, f"❌ Lỗi khi gọi API sự kiện (Code: {airdrop_res.status_code})."
+        
+        data = airdrop_res.json()
+        airdrops = data.get('airdrops', [])
+        if not airdrops: return [], None
 
+        price_data = _get_price_data()
+        definitive_events = _filter_and_deduplicate_events(airdrops)
+        
+        for event in definitive_events:
+            event['effective_dt'] = _get_effective_event_time(event)
+            event['price_data'] = price_data
+
+        return definitive_events, None
+    except requests.RequestException: return None, "❌ Lỗi mạng khi lấy dữ liệu sự kiện."
+    except json.JSONDecodeError: return None, "❌ Dữ liệu trả về từ API sự kiện không hợp lệ."
+
+def get_airdrop_events() -> str:
+    """
+    Hàm giao diện: Gọi hàm logic cốt lõi và định dạng kết quả thành tin nhắn cho người dùng.
+    """
+    processed_events, error_message = _get_processed_airdrop_events()
+    if error_message:
+        return error_message
+    if not processed_events:
+        return "ℹ️ Không tìm thấy sự kiện airdrop nào."
+
+    def _format_event_message(event, price_data, effective_dt):
+        token, name = event.get('token', 'N/A'), event.get('name', 'N/A')
+        points, amount_str = event.get('points') or '-', event.get('amount') or '-'
         display_time = effective_dt.strftime('%H:%M') if effective_dt else (event.get('time') or 'TBA')
 
         price_str, value_str = "", ""
@@ -121,78 +129,50 @@ def get_airdrop_events() -> str:
                 except (ValueError, TypeError): pass
         
         time_str = f"`{display_time}`"
-        
         return (f"*{token} - {name}*{price_str}\n"
                 f"  Points: `{points}` | Amount: `{amount_str}`{value_str}\n"
                 f"  Time: {time_str}")
 
-    # --- Logic chính của hàm ---
-    try:
-        airdrop_res = requests.get(AIRDROP_API_URL, headers=HEADERS, timeout=20)
-        if airdrop_res.status_code != 200:
-            return f"❌ Lỗi khi gọi API sự kiện (Code: {airdrop_res.status_code})."
+    now_vietnam = datetime.now(TIMEZONE)
+    today_date = now_vietnam.date()
+    todays_events, upcoming_events = [], []
+
+    for event in processed_events:
+        effective_dt = event['effective_dt']
+        if effective_dt and effective_dt < now_vietnam: continue
         
-        data = airdrop_res.json()
-        price_data = _get_price_data()
+        event_day = effective_dt.date() if effective_dt else datetime.strptime(event.get('date'), '%Y-%m-%d').date()
+        if event_day == today_date:
+            todays_events.append(event)
+        elif event_day > today_date:
+            upcoming_events.append(event)
+
+    todays_events.sort(key=lambda x: x['effective_dt'] or datetime.max.replace(tzinfo=TIMEZONE))
+    upcoming_events.sort(key=lambda x: x['effective_dt'] or datetime.max.replace(tzinfo=TIMEZONE))
+    
+    message_parts = []
+    price_data = processed_events[0]['price_data'] if processed_events else {}
+    
+    if todays_events:
+        today_messages = [_format_event_message(e, price_data, e['effective_dt']) for e in todays_events]
+        message_parts.append("🎁 *Today's Airdrops:*\n\n" + "\n\n".join(today_messages))
+
+    if upcoming_events:
+        if message_parts: message_parts.append("\n\n" + "-"*25 + "\n\n")
         
-        airdrops = data.get('airdrops', [])
-        if not airdrops: return "ℹ️ Không tìm thấy sự kiện airdrop nào."
+        upcoming_messages = []
+        for event in upcoming_events:
+            effective_dt = event['effective_dt']
+            event_copy = event.copy()
+            if effective_dt and effective_dt.date() == today_date + timedelta(days=1) and not event.get('time'):
+                event_copy['time'] = "Tomorrow (UTC)"
+            upcoming_messages.append(_format_event_message(event_copy, price_data, effective_dt))
+        message_parts.append("🗓️ *Upcoming Airdrops:*\n\n" + "\n\n".join(upcoming_messages))
 
-        definitive_events = _filter_and_deduplicate_events(airdrops)
-        now_vietnam = datetime.now(TIMEZONE)
-        today_date = now_vietnam.date()
-        
-        todays_events, upcoming_events = [], []
-
-        for event in definitive_events:
-            effective_dt = _get_effective_event_time(event)
-            
-            # Bỏ qua sự kiện nếu thời gian hiệu lực đã qua
-            if effective_dt and effective_dt < now_vietnam:
-                continue
-
-            # Dùng ngày từ API cho các sự kiện không có thời gian cụ thể (TBA)
-            event_day = effective_dt.date() if effective_dt else datetime.strptime(event.get('date'), '%Y-%m-%d').date()
-            
-            event['effective_dt'] = effective_dt
-            if event_day == today_date:
-                todays_events.append(event)
-            elif event_day > today_date:
-                upcoming_events.append(event)
-
-        todays_events.sort(key=lambda x: x['effective_dt'] or datetime.max.replace(tzinfo=TIMEZONE))
-        upcoming_events.sort(key=lambda x: x['effective_dt'] or datetime.max.replace(tzinfo=TIMEZONE))
-        
-        message_parts = []
-        
-        if todays_events:
-            today_messages = [_format_event_message(e, price_data, e['effective_dt']) for e in todays_events]
-            message_parts.append("🎁 *Today's Airdrops:*\n\n")
-            message_parts.append("\n\n".join(today_messages))
-
-        if upcoming_events:
-            if message_parts: message_parts.append("\n\n" + "-"*25 + "\n\n")
-            
-            upcoming_messages = []
-            for event in upcoming_events:
-                effective_dt = event['effective_dt']
-                event_copy = event.copy()
-                if effective_dt and effective_dt.date() == today_date + timedelta(days=1) and not event.get('time'):
-                    event_copy['time'] = "Tomorrow (UTC)"
-                upcoming_messages.append(_format_event_message(event_copy, price_data, effective_dt))
-
-            message_parts.append("🗓️ *Upcoming Airdrops:*\n\n")
-            message_parts.append("\n\n".join(upcoming_messages))
-
-        if not message_parts:
-            return "ℹ️ Không có sự kiện airdrop nào đáng chú ý trong hôm nay và các ngày sắp tới."
-        
-        return "".join(message_parts)
-
-    except requests.RequestException: return "❌ Lỗi mạng khi lấy dữ liệu sự kiện."
-    except json.JSONDecodeError: return "❌ Dữ liệu trả về từ API sự kiện không hợp lệ."
-
-# --- KẾT THÚC KHỐI CODE THAY THẾ ---
+    if not message_parts:
+        return "ℹ️ Không có sự kiện airdrop nào đáng chú ý trong hôm nay và các ngày sắp tới."
+    
+    return "".join(message_parts)
 
 
 def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | None]:
@@ -813,6 +793,7 @@ def webhook():
                              "`/gt <thuật ngữ>`\n"
                              "`/tr <nội dung>`\n"
                              "`/event` - Xem lịch airdrop sắp tới\n"
+                             "`/autonotify on` - Bật thông báo tự động cho nhóm\n"
                              "`/perp <ký hiệu>`\n"
                              "`/alert <contract> <%>`\n"
                              "`/unalert <contract>`\n"
@@ -828,6 +809,25 @@ def webhook():
                              "```\n/folio\n0.5 btc\n10 eth\n```")
             send_telegram_message(chat_id, text=start_message)
                 # Sửa dòng này để bao gồm /del
+        elif cmd == "/autonotify":
+            if len(parts) < 2:
+                send_telegram_message(chat_id, text="Cú pháp sai. Dùng: `/autonotify on` hoặc `/autonotify off`.", reply_to_message_id=msg_id)
+            else:
+                sub_command = parts[1].lower()
+                if sub_command == 'on':
+                    if kv:
+                        kv.sadd("event_notification_groups", chat_id)
+                        send_telegram_message(chat_id, text="✅ Đã bật tính năng tự động thông báo và ghim tin nhắn cho các sự kiện airdrop trong nhóm này.")
+                    else:
+                        send_telegram_message(chat_id, text="❌ Lỗi: Không thể thực hiện do không kết nối được DB.")
+                elif sub_command == 'off':
+                    if kv:
+                        kv.srem("event_notification_groups", chat_id)
+                        send_telegram_message(chat_id, text="✅ Đã tắt tính năng tự động thông báo sự kiện trong nhóm này.")
+                    else:
+                        send_telegram_message(chat_id, text="❌ Lỗi: Không thể thực hiện do không kết nối được DB.")
+                else:
+                    send_telegram_message(chat_id, text="Cú pháp sai. Dùng: `/autonotify on` hoặc `/autonotify off`.", reply_to_message_id=msg_id)
         elif cmd in ['/add', '/edit', '/del']:
             success = False; message = ""
             if cmd == '/add':
@@ -919,7 +919,74 @@ def webhook():
         #else:
             #send_telegram_message(chat_id, text="🤔 Cú pháp không hợp lệ. Gửi /start để xem hướng dẫn.", reply_to_message_id=msg_id)
     return jsonify(success=True)
+def check_events_and_notify_groups():
+    """
+    Kiểm tra các sự kiện airdrop và gửi thông báo + ghim tin nhắn
+    cho tất cả các nhóm đã đăng ký.
+    """
+    if not kv:
+        print("Event check skipped: No DB connection.")
+        return 0
 
+    print(f"[{datetime.now()}] Running group event notification check...")
+    events, error = _get_processed_airdrop_events()
+    if error or not events:
+        print(f"Could not fetch events for notification: {error or 'No events found.'}")
+        return 0
+
+    notifications_sent = 0
+    now = datetime.now(TIMEZONE)
+    
+    subscribers = kv.smembers("event_notification_groups")
+    if not subscribers:
+        print("Event check skipped: No subscribed groups.")
+        return 0
+
+    for event in events:
+        event_time = event.get('effective_dt')
+        if not event_time: continue
+
+        if event_time > now:
+            time_until_event = event_time - now
+            
+            if timedelta(minutes=0) < time_until_event <= timedelta(minutes=REMINDER_THRESHOLD_MINUTES):
+                event_id = f"{event.get('token')}-{event_time.isoformat()}"
+                
+                for chat_id in subscribers:
+                    redis_key = f"event_notified:{chat_id}:{event_id}"
+
+                    if not kv.exists(redis_key):
+                        minutes_left = int(time_until_event.total_seconds() // 60) + 1
+                        token, name = event.get('token', 'N/A'), event.get('name', 'N/A')
+                        
+                        message = (f"‼️ *AIRDROP SẮP DIỄN RA* ‼️\n\n"
+                                   f"Sự kiện: *{name} ({token})*\n"
+                                   f"Thời gian: Trong vòng *{minutes_left} phút* nữa.")
+                        
+                        sent_message_id = send_telegram_message(chat_id, text=message)
+                        
+                        if sent_message_id:
+                            # Chỉ ghim tin nhắn nếu gửi thành công
+                            pin_telegram_message(chat_id, sent_message_id)
+                            notifications_sent += 1
+                            # Đánh dấu đã thông báo, key tự xóa sau 1 giờ để dọn dẹp
+                            kv.set(redis_key, "1", ex=3600)
+
+    print(f"Group event notification check finished. Sent: {notifications_sent} notifications.")
+    return notifications_sent
+
+@app.route('/check_events', methods=['POST'])
+def event_cron_webhook():
+    """Endpoint để cron job gọi đến để kiểm tra sự kiện airdrop."""
+    if not kv or not BOT_TOKEN or not CRON_SECRET:
+        return jsonify(error="Server not configured"), 500
+    
+    secret = request.headers.get('X-Cron-Secret') or (request.is_json and request.get_json().get('secret'))
+    if secret != CRON_SECRET:
+        return jsonify(error="Unauthorized"), 403
+
+    sent_count = check_events_and_notify_groups()
+    return jsonify(success=True, notifications_sent=sent_count)
 @app.route('/check_reminders', methods=['POST'])
 def cron_webhook():
     if not kv or not BOT_TOKEN or not CRON_SECRET: return jsonify(error="Server not configured"), 500
