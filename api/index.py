@@ -41,43 +41,26 @@ except Exception as e:
     print(f"FATAL: Could not connect to Redis. Error: {e}"); kv = None
 # --- LOGIC QUẢN LÝ CÔNG VIỆC ---
 def get_airdrop_events() -> str:
-    """Lấy và định dạng danh sách các sự kiện airdrop sắp tới."""
-    COOKIE = os.getenv("ALPHA123_COOKIE")
-    if not COOKIE:
-        return "❌ Lỗi cấu hình: Thiếu `ALPHA123_COOKIE`. Vui lòng liên hệ admin."
-
-    url = "https://alpha123.uk/api/data?fresh=1"
-    
-    ### <<< THAY ĐỔI: Bổ sung đầy đủ các header quan trọng ###
+    """Lấy và định dạng danh sách các sự kiện airdrop sắp tới từ API mới."""
+    url = "https://alpha123.uk/api/price/?batch=today"
     headers = {
-        'authority': 'alpha123.uk',
-        'accept': 'application/json, text/plain, */*',
-        'accept-language': 'en-US,en;q=0.9',
-
-        'referer': 'https://alpha123.uk/index.html',
-        'sec-ch-ua': '"Not/A)Brand";v="99", "Google Chrome";v="139", "Chromium";v="139"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
-        'sec-fetch-dest': 'empty',
-        'sec-fetch-mode': 'cors',
-        'sec-fetch-site': 'same-origin',
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
+      'referer': 'https://alpha123.uk/index.html'
     }
     
     try:
         res = requests.get(url, headers=headers, timeout=20)
         
-        # In log để debug
-        print(f"API Response Status Code: {res.status_code}")
         if res.status_code != 200:
-            print(f"API Response Body: {res.text[:500]}") # In ra nội dung lỗi
-            return f"❌ Lỗi khi gọi API sự kiện (Code: {res.status_code}). Nguyên nhân có thể là do cookie đã hết hạn hoặc IP bị chặn. Vui lòng thử lấy lại cookie mới."
+            return f"❌ Lỗi khi gọi API sự kiện (Code: {res.status_code}). Dịch vụ có thể đang tạm thời gián đoạn."
         
         data = res.json()
+        
+        # Dựa trên cấu trúc JSON cũ, chúng ta vẫn tìm key 'airdrops'
+        # Nếu cấu trúc JSON mới khác, chúng ta sẽ cần điều chỉnh ở đây
         airdrops = data.get('airdrops', [])
         
         if not airdrops:
-            return "ℹ️ Không tìm thấy sự kiện airdrop nào trong dữ liệu trả về."
+            return "ℹ️ Không tìm thấy sự kiện airdrop nào trong dữ liệu trả về hôm nay."
 
         # Lọc ra các sự kiện trong tương lai
         upcoming_events = []
@@ -87,7 +70,8 @@ def get_airdrop_events() -> str:
                 datetime_str = f"{event.get('date')} {event.get('time')}"
                 event_dt = TIMEZONE.localize(datetime.strptime(datetime_str, '%Y-%m-%d %H:%M'))
                 
-                if event_dt > now:
+                # Vì API là `batch=today`, chúng ta sẽ hiển thị tất cả sự kiện trong ngày
+                if event_dt.date() == now.date() and event_dt > now:
                     upcoming_events.append({
                         'name': event.get('name', 'N/A'),
                         'event_dt': event_dt
@@ -96,24 +80,25 @@ def get_airdrop_events() -> str:
                 continue
         
         if not upcoming_events:
-            return "ℹ️ Không có sự kiện airdrop nào sắp tới."
+            return "ℹ️ Không có sự kiện airdrop nào sắp diễn ra trong hôm nay."
             
+        # Sắp xếp các sự kiện theo thời gian
         upcoming_events.sort(key=lambda x: x['event_dt'])
         
-        message_parts = ["*🗓️ Các sự kiện Airdrop sắp tới:*"]
-        for event in upcoming_events[:10]:
+        # Định dạng kết quả
+        message_parts = ["*🗓️ Các sự kiện Airdrop hôm nay:*"]
+        for event in upcoming_events:
             name = event['name']
-            dt = event['event_dt']
-            date_str = dt.strftime('%d/%m/%Y')
-            time_str = dt.strftime('%H:%M')
-            message_parts.append(f"\n\n- *{name}*\n  `{date_str}` - `{time_str}`")
+            time_str = event['event_dt'].strftime('%H:%M')
+            message_parts.append(f"\n- *{name}* lúc `{time_str}`")
             
-        return "".join(message_parts)
+        return "\n".join(message_parts)
 
     except requests.RequestException as e:
         print(f"Request exception for Event API: {e}")
         return "❌ Lỗi mạng khi lấy dữ liệu sự kiện."
     except json.JSONDecodeError:
+        return "❌ Dữ liệu trả về từ API sự kiện không hợp lệ."
         return "❌ Dữ liệu trả về từ API không phải là JSON. Có thể bạn đã bị chặn và nhận về trang HTML."
 
 
