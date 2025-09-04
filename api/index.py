@@ -949,7 +949,7 @@ def check_events_and_notify_groups():
         if event_time > now:
             time_until_event = event_time - now
             
-            if timedelta(minutes=0) < time_until_event <= timedelta(minutes=REMINDER_THRESHOLD_MINUTES):
+            if if timedelta(minutes=0) < time_until_event <= timedelta(minutes=6):
                 event_id = f"{event.get('token')}-{event_time.isoformat()}"
                 
                 for chat_id in subscribers:
@@ -959,7 +959,7 @@ def check_events_and_notify_groups():
                         minutes_left = int(time_until_event.total_seconds() // 60) + 1
                         token, name = event.get('token', 'N/A'), event.get('name', 'N/A')
                         
-                        message = (f"‼️ *AIRDROP SẮP DIỄN RA* ‼️\n\n"
+                        message = (f"‼️ *ANH NHẮC EM* ‼️\n\n"
                                    f"Sự kiện: *{name} ({token})*\n"
                                    f"Thời gian: Trong vòng *{minutes_left} phút* nữa.")
                         
