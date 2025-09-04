@@ -14,7 +14,7 @@ AUTO_SEARCH_NETWORKS = ['bsc', 'eth', 'tron', 'polygon', 'arbitrum', 'base']
 TIMEZONE = pytz.timezone('Asia/Ho_Chi_Minh')
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CRON_SECRET = os.getenv("CRON_SECRET")
-REMINDER_THRESHOLD_MINUTES = 10
+REMINDER_THRESHOLD_MINUTES = 5
 SYMBOL_TO_ID_MAP = {
     'btc': 'bitcoin', 'eth': 'ethereum', 'bnb': 'binancecoin', 'sol': 'solana',
     'xrp': 'ripple', 'doge': 'dogecoin', 'shib': 'shiba-inu', 'degen': 'degen-base',
