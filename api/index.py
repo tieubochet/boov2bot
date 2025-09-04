@@ -343,7 +343,7 @@ def list_tasks(chat_id) -> str:
     user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
     active_tasks = [t for t in user_tasks if datetime.fromisoformat(t['time_iso']) > datetime.now(TIMEZONE)]
     if len(active_tasks) < len(user_tasks): kv.set(f"tasks:{chat_id}", json.dumps(active_tasks))
-    if not active_tasks: return "Bạn không có lịch hẹn nào sắp tới."
+    if not active_tasks: return "Bạn không có lịch hẹn nào sắp tới.\nChuyển qua dùng /event để show toàn bộ sự kiện!"
     result_lines = ["*🗓️ Danh sách lịch hẹn của bạn:*"]
     for i, task in enumerate(active_tasks):
         result_lines.append(f"*{i+1}.* `{datetime.fromisoformat(task['time_iso']).strftime('%H:%M %d/%m')}` - {task['name']}")
