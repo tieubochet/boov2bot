@@ -53,7 +53,7 @@ def get_airdrop_events() -> str:
         'authority': 'alpha123.uk',
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'en-US,en;q=0.9',
-        'cookie': COOKIE,
+
         'referer': 'https://alpha123.uk/index.html',
         'sec-ch-ua': '"Not/A)Brand";v="99", "Google Chrome";v="139", "Chromium";v="139"',
         'sec-ch-ua-mobile': '?0',
