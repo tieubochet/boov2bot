@@ -56,6 +56,11 @@ def get_airdrop_events() -> str:
     
     try:
         res = requests.get(url, headers=headers, timeout=20)
+
+        print(f"API Response Status Code: {res.status_code}")
+        print(f"API Response Body (first 500 chars): {res.text[:500]}")
+
+        
         if res.status_code != 200:
             return f"❌ Lỗi khi gọi API sự kiện (Code: {res.status_code}). Có thể cookie đã hết hạn."
         
