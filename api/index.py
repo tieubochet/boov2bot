@@ -95,7 +95,7 @@ def get_airdrop_events() -> str:
             
             # QUY TẮC NGHIỆP VỤ: Nếu là phase 2, cộng thêm 18 giờ
             if event.get('phase') == 2:
-                naive_dt += timedelta(hours=18)
+                naive_dt += timedelta(hours=17)
             
             return TIMEZONE.localize(naive_dt)
         except (ValueError, pytz.exceptions.PytzError):
