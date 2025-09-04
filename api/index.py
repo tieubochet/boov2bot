@@ -43,7 +43,7 @@ except Exception as e:
 def get_airdrop_events() -> str:
     """
     Lấy và định dạng danh sách các sự kiện airdrop từ API,
-    hiển thị thời gian theo giờ Việt Nam (GMT+7).
+    lọc bỏ các sự kiện đã qua trong ngày trước khi gom nhóm.
     """
     AIRDROP_API_URL = "https://alpha123.uk/api/data?fresh=1"
     PRICE_API_URL = "https://alpha123.uk/api/price/?batch=today"
@@ -66,15 +66,17 @@ def get_airdrop_events() -> str:
         return {}
 
     def _filter_and_deduplicate_events(events):
-        """Loại bỏ các sự kiện trùng lặp (cùng token, cùng ngày), giữ lại sự kiện đầu tiên."""
+        """
+        Lọc và gom nhóm các sự kiện trùng lặp (cùng token, cùng ngày),
+        ưu tiên giữ lại sự kiện có 'phase' cao nhất.
+        """
         processed = {}
         for event in events:
             key = (event.get('date'), event.get('token'))
-            if key not in processed:
+            if key not in processed or event.get('phase', 1) > processed[key].get('phase', 1):
                 processed[key] = event
         return list(processed.values())
 
-    # --- THAY ĐỔI LOGIC ĐỊNH DẠNG THỜI GIAN TẠI ĐÂY ---
     def _format_event_message(event, price_data):
         """Định dạng tin nhắn cho một sự kiện, chuyển đổi thời gian sang giờ Việt Nam."""
         token = event.get('token', 'N/A')
@@ -85,24 +87,14 @@ def get_airdrop_events() -> str:
         time_from_api = event.get('time') or 'TBA'
         date_from_api = event.get('date')
         
-        # Chuyển đổi thời gian sang giờ Việt Nam
         display_time = time_from_api
-        # Chỉ chuyển đổi nếu có ngày và thời gian có định dạng hợp lệ (chứa dấu :)
         if date_from_api and ':' in time_from_api:
             try:
-                # 1. Tạo đối tượng datetime ngây thơ (naive) từ chuỗi
                 naive_dt = datetime.strptime(f"{date_from_api} {time_from_api}", '%Y-%m-%d %H:%M')
-                
-                # 2. Gán múi giờ UTC cho nó
                 utc_dt = pytz.utc.localize(naive_dt)
-                
-                # 3. Chuyển đổi sang múi giờ Việt Nam
                 vietnam_dt = utc_dt.astimezone(TIMEZONE)
-                
-                # 4. Định dạng lại thành chuỗi HH:MM
                 display_time = vietnam_dt.strftime('%H:%M')
             except (ValueError, pytz.exceptions.PytzError):
-                # Nếu có lỗi, giữ nguyên thời gian gốc từ API
                 display_time = time_from_api
 
         price_str, value_str = "", ""
@@ -134,7 +126,8 @@ def get_airdrop_events() -> str:
         airdrops = data.get('airdrops', [])
         if not airdrops: return "ℹ️ Không tìm thấy sự kiện airdrop nào trong dữ liệu trả về."
 
-        today_date = datetime.now(TIMEZONE).date()
+        now_vietnam = datetime.now(TIMEZONE)
+        today_date = now_vietnam.date()
         yesterday_date = today_date - timedelta(days=1)
         
         todays_events_raw, upcoming_events_raw = [], []
@@ -144,13 +137,40 @@ def get_airdrop_events() -> str:
             if not event_date_str: continue
             try:
                 event_date = datetime.strptime(event_date_str, '%Y-%m-%d').date()
-                if event_date == today_date or (event_date == yesterday_date and event.get('completed') is False):
+
+                # --- SỬA LỖI LOGIC TẠI ĐÂY ---
+                # Xử lý các sự kiện của ngày hôm nay
+                if event_date == today_date:
+                    event_time_str = event.get('time')
+                    # Chỉ kiểm tra thời gian nếu nó có định dạng hợp lệ
+                    if event_time_str and ':' in event_time_str:
+                        try:
+                            # Chuyển thời gian sự kiện (UTC) sang giờ Việt Nam để so sánh
+                            naive_dt = datetime.strptime(f"{event_date_str} {event_time_str}", '%Y-%m-%d %H:%M')
+                            utc_dt = pytz.utc.localize(naive_dt)
+                            event_dt_vietnam = utc_dt.astimezone(TIMEZONE)
+                            
+                            # Nếu thời gian sự kiện đã qua, bỏ qua nó
+                            if event_dt_vietnam < now_vietnam:
+                                continue
+                        except ValueError:
+                            pass # Bỏ qua nếu định dạng thời gian sai
+                    
+                    # Nếu thời gian chưa tới hoặc là TBA, thêm vào danh sách xử lý
                     todays_events_raw.append(event)
+                
+                # Xử lý sự kiện chưa hoàn thành của hôm qua
+                elif event_date == yesterday_date and event.get('completed') is False:
+                    todays_events_raw.append(event)
+                
+                # Xử lý sự kiện sắp tới
                 elif event_date > today_date:
                     upcoming_events_raw.append(event)
+
             except ValueError:
                 continue
         
+        # Các bước sau giữ nguyên: gom nhóm và định dạng các sự kiện HỢP LỆ còn lại
         todays_events = _filter_and_deduplicate_events(todays_events_raw)
         upcoming_events = _filter_and_deduplicate_events(upcoming_events_raw)
 
@@ -188,6 +208,8 @@ def get_airdrop_events() -> str:
         return "❌ Lỗi mạng khi lấy dữ liệu sự kiện."
     except json.JSONDecodeError:
         return "❌ Dữ liệu trả về từ API sự kiện không hợp lệ."
+
+        
 def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | None]:
     try:
         time_part, name_part = task_string.split(' - ', 1)
