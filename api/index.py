@@ -574,6 +574,7 @@ def unalert_price(chat_id, address: str) -> str:
         return f"✅ Đã xóa cảnh báo giá cho token `{address[:6]}...{address[-4:]}`."
     else:
         return f"❌ Không tìm thấy cảnh báo nào cho token `{address[:6]}...{address[-4:]}`."
+# --- THAY THẾ HÀM set_price_alert CŨ BẰNG HÀM NÀY ---
 def set_price_alert(chat_id, address: str, percentage_str: str) -> str:
     """Thiết lập cảnh báo giá cho một token."""
     if not kv: return "Lỗi: Chức năng cảnh báo giá không khả dụng do không kết nối được DB."
@@ -585,7 +586,10 @@ def set_price_alert(chat_id, address: str, percentage_str: str) -> str:
     except ValueError:
         return "❌ Phần trăm không hợp lệ. Vui lòng nhập một con số (ví dụ: `5`)."
 
-    token_info = get_price_by_contract(address)
+    # --- SỬA LỖI TẠI ĐÂY ---
+    # Thay thế get_price_by_contract bằng get_token_details_by_contract
+    token_info = get_token_details_by_contract(address)
+    
     if not token_info:
         return f"❌ Không thể tìm thấy thông tin cho token `{address[:10]}...` để đặt cảnh báo."
     
@@ -594,8 +598,8 @@ def set_price_alert(chat_id, address: str, percentage_str: str) -> str:
     alert_data = {
         "address": address.lower(),
         "network": token_info['network'],
-        "symbol": token_info['symbol'], # Lưu lại symbol
-        "name": token_info['name'],       # Lưu lại name
+        "symbol": token_info['symbol'],
+        "name": token_info['name'],
         "chat_id": chat_id,
         "threshold_percent": percentage,
         "reference_price": current_price
@@ -663,6 +667,7 @@ def get_token_details_by_contract(address: str) -> dict | None:
         except requests.RequestException:
             continue
     return None
+# --- THAY THẾ HÀM check_price_alerts CŨ BẰNG HÀM NÀY ---
 def check_price_alerts():
     if not kv: print("Price Alert check skipped due to no DB connection."); return
     all_alerts_raw = kv.hgetall("price_alerts")
@@ -672,8 +677,10 @@ def check_price_alerts():
             address = alert['address']; network = alert['network']; chat_id = alert['chat_id']
             threshold = alert['threshold_percent']; ref_price = alert['reference_price']
             
-            # Lấy giá hiện tại của token
-            token_info = get_price_by_contract(address)
+            # --- SỬA LỖI TẠI ĐÂY ---
+            # Thay thế get_price_by_contract bằng get_token_details_by_contract
+            token_info = get_token_details_by_contract(address)
+            
             if not token_info: continue
             
             current_price = token_info['price']
@@ -682,7 +689,6 @@ def check_price_alerts():
             
             if abs(price_change_pct) >= threshold:
                 emoji = "📈" if price_change_pct > 0 else "📉"
-                # Sử dụng tên và ký hiệu đã lưu
                 name = alert.get('name', address)
                 symbol = alert.get('symbol', 'Token')
                 
