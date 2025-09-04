@@ -79,7 +79,7 @@ def _get_processed_airdrop_events():
         try:
             naive_dt = datetime.strptime(f"{event_date_str} {event_time_str}", '%Y-%m-%d %H:%M')
             if event.get('phase') == 2:
-                naive_dt += timedelta(hours=18)
+                naive_dt += timedelta(hours=17)
             return TIMEZONE.localize(naive_dt)
         except (ValueError, pytz.exceptions.PytzError):
             return None
@@ -949,7 +949,7 @@ def check_events_and_notify_groups():
         if event_time > now:
             time_until_event = event_time - now
             
-            if if timedelta(minutes=0) < time_until_event <= timedelta(minutes=1440):
+            if timedelta(minutes=0) < time_until_event <= timedelta(minutes=6):
                 event_id = f"{event.get('token')}-{event_time.isoformat()}"
                 
                 for chat_id in subscribers:
