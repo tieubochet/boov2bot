@@ -138,7 +138,7 @@ def get_airdrop_events() -> str:
         
         if todays_events:
             today_messages = [_format_event_message(e, price_data) for e in todays_events]
-            message_parts.append("🎁 *Today's Airdrops:*\n")
+            message_parts.append("🎁 *Today's Airdrops:*\n\n")
             message_parts.append("\n\n".join(today_messages))
 
         if upcoming_events:
@@ -153,7 +153,7 @@ def get_airdrop_events() -> str:
                     event_copy['time'] = "Tomorrow (UTC)"
                 upcoming_messages.append(_format_event_message(event_copy, price_data))
 
-            message_parts.append("🗓️ *Upcoming Airdrops:*\n")
+            message_parts.append("🗓️ *Upcoming Airdrops:*\n\n")
             message_parts.append("\n\n".join(upcoming_messages))
 
         if not message_parts:
