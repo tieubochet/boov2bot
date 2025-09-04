@@ -12,6 +12,7 @@ import google.generativeai as genai
 # --- CẤU HÌNH ---
 AUTO_SEARCH_NETWORKS = ['bsc', 'eth', 'tron', 'polygon', 'arbitrum', 'base']
 TIMEZONE = pytz.timezone('Asia/Ho_Chi_Minh')
+CHINA_TIMEZONE = pytz.timezone('Asia/Shanghai')
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CRON_SECRET = os.getenv("CRON_SECRET")
 REMINDER_THRESHOLD_MINUTES = 5
@@ -71,16 +72,31 @@ def _get_processed_airdrop_events():
                 processed[key] = event
         return list(processed.values())
 
+    # --- THAY ĐỔI LOGIC MÚI GIỜ TẠI ĐÂY ---
     def _get_effective_event_time(event):
+        """
+        Trả về thời gian hiệu lực của sự kiện dưới dạng datetime object (đã ở múi giờ Việt Nam).
+        API time được coi là giờ Trung Quốc (UTC+8).
+        """
         event_date_str = event.get('date')
         event_time_str = event.get('time')
         if not (event_date_str and event_time_str and ':' in event_time_str):
             return None
         try:
+            # 1. Tạo datetime object ngây thơ (naive)
             naive_dt = datetime.strptime(f"{event_date_str} {event_time_str}", '%Y-%m-%d %H:%M')
+            
+            # 2. Áp dụng quy tắc nghiệp vụ (+18 giờ cho phase 2)
             if event.get('phase') == 2:
-                naive_dt += timedelta(hours=17)
-            return TIMEZONE.localize(naive_dt)
+                naive_dt += timedelta(hours=18)
+            
+            # 3. Gán múi giờ gốc (Trung Quốc) cho nó để nó "nhận biết" múi giờ
+            china_dt = CHINA_TIMEZONE.localize(naive_dt)
+            
+            # 4. Chuyển đổi sang múi giờ đích (Việt Nam)
+            vietnam_dt = china_dt.astimezone(TIMEZONE)
+            
+            return vietnam_dt
         except (ValueError, pytz.exceptions.PytzError):
             return None
 
