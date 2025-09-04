@@ -40,81 +40,88 @@ try:
 except Exception as e:
     print(f"FATAL: Could not connect to Redis. Error: {e}"); kv = None
 # --- LOGIC QUẢN LÝ CÔNG VIỆC ---
-def filter_and_deduplicate_events(events):
-    """
-    Lọc các sự kiện trùng lặp trong cùng một ngày cho cùng một token.
-    Ưu tiên giữ lại sự kiện có 'phase' cao nhất.
-    """
-    processed_events = {}
-    for event in events:
-        key = (event.get('date'), event.get('token'))
-        if key not in processed_events or event.get('phase', 1) > processed_events[key].get('phase', 1):
-            processed_events[key] = event
-    return list(processed_events.values())
-
-def format_event_message(event, price_data, show_phase_for_token=None):
-    """Định dạng tin nhắn cho một sự kiện."""
-    token = event.get('token', 'N/A')
-    name = event.get('name', 'N/A')
-    points = event.get('points') or '-'
-    amount_str = event.get('amount') or '-'
-    time = event.get('time') or 'TBA'
-    phase = event.get('phase')
-
-    price_str = ""; value_str = ""
-    price_value = 0
-    token_price_info = price_data.get(token)
-    if token_price_info:
-        price_value = token_price_info.get('dex_price') or token_price_info.get('price', 0)
-
-    if price_value > 0:
-        price_str = f" (`${price_value:,.4f}`)"
-        try:
-            amount_float = float(amount_str.replace(',', ''))
-            value = amount_float * price_value
-            value_str = f"\n  Value: `${value:,.2f}`"
-        except (ValueError, TypeError):
-            pass
-            
-    phase_str = ""
-    if phase and (show_phase_for_token and show_phase_for_token.get(token, 0) > 1):
-        phase_str = f" (Phase {phase})"
-        
-    time_str = f"`{time}{phase_str}`"
-    
-    return f"- *{token} - {name}*{price_str}\n  Points: `{points}` | Amount: `{amount_str}`{value_str}\n  Time: {time_str}"
-
 def get_airdrop_events() -> str:
     """
-    Lấy và định dạng danh sách các sự kiện airdrop chi tiết bằng cách kết hợp 2 API.
+    Lấy và định dạng danh sách các sự kiện airdrop từ API,
+    áp dụng logic lọc, gom nhóm và định dạng phức tạp.
     """
-    url_events = "https://alpha123.uk/api/data?fresh=1"
-    url_prices = "https://alpha123.uk/api/price/?batch=today"
-    headers = {
-      'referer': 'https://alpha123.uk/vi/index.html',
+    AIRDROP_API_URL = "https://alpha123.uk/api/data?fresh=1"
+    PRICE_API_URL = "https://alpha123.uk/api/price/?batch=today"
+    HEADERS = {
+      'referer': 'https://alpha123.uk/index.html',
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
-    
-    try:
-        res_events = requests.get(url_events, headers=headers, timeout=20)
-        res_prices = requests.get(url_prices, headers=headers, timeout=20)
 
-        if res_events.status_code != 200 or res_prices.status_code != 200:
-            return "❌ Lỗi khi gọi API sự kiện hoặc giá."
+    # --- Các hàm phụ trợ ---
+    def _get_price_data():
+        """Hàm phụ để lấy dữ liệu giá."""
+        try:
+            res = requests.get(PRICE_API_URL, headers=HEADERS, timeout=10)
+            if res.status_code == 200:
+                price_json = res.json()
+                if price_json.get('success') and 'prices' in price_json:
+                    return price_json['prices']
+        except Exception:
+            pass # Lỗi sẽ được bỏ qua và trả về dict rỗng
+        return {}
+
+    def _filter_and_deduplicate_events(events):
+        """Lọc sự kiện trùng lặp, giữ lại phase cao nhất."""
+        processed = {}
+        for event in events:
+            key = (event.get('date'), event.get('token'))
+            if key not in processed or event.get('phase', 1) > processed[key].get('phase', 1):
+                processed[key] = event
+        return list(processed.values())
+
+    def _format_event_message(event, price_data):
+        """Định dạng tin nhắn cho một sự kiện."""
+        token = event.get('token', 'N/A')
+        name = event.get('name', 'N/A')
+        points = event.get('points') or '-'
+        amount_str = event.get('amount') or '-'
+        time = event.get('time') or 'TBA'
+        phase = event.get('phase')
+
+        price_str, value_str = "", ""
+        price_value = 0
+        if token in price_data:
+            price_value = price_data[token].get('dex_price') or price_data[token].get('price', 0)
+
+        if price_value > 0:
+            price_str = f" (`${price_value:,.4f}`)"
+            try:
+                value = float(amount_str) * price_value
+                value_str = f"\n  Value: `${value:,.2f}`"
+            except (ValueError, TypeError):
+                pass
         
-        events_data = res_events.json().get('airdrops', [])
-        price_data = res_prices.json().get('prices', {})
+        phase_str = f" (Phase {phase})" if phase else ""
+        time_str = f"`{time}{phase_str}`"
         
-        if not events_data:
-            return "ℹ️ Không tìm thấy sự kiện airdrop nào."
+        return (f"- *{token} - {name}*{price_str}\n"
+                f"  Points: `{points}` | Amount: `{amount_str}`{value_str}\n"
+                f"  Time: {time_str}")
+
+    # --- Logic chính của hàm ---
+    try:
+        airdrop_res = requests.get(AIRDROP_API_URL, headers=HEADERS, timeout=20)
+        if airdrop_res.status_code != 200:
+            return f"❌ Lỗi khi gọi API sự kiện (Code: {airdrop_res.status_code})."
+        
+        data = airdrop_res.json()
+        price_data = _get_price_data()
+        
+        airdrops = data.get('airdrops', [])
+        if not airdrops:
+            return "ℹ️ Không tìm thấy sự kiện airdrop nào trong dữ liệu trả về."
 
         today_date = datetime.now(TIMEZONE).date()
         yesterday_date = today_date - timedelta(days=1)
         
-        todays_events_raw = []
-        upcoming_events_raw = []
-        
-        for event in events_data:
+        todays_events_raw, upcoming_events_raw = [], []
+
+        for event in airdrops:
             event_date_str = event.get('date', '')
             if not event_date_str: continue
             try:
@@ -123,46 +130,40 @@ def get_airdrop_events() -> str:
                     todays_events_raw.append(event)
                 elif event_date > today_date:
                     upcoming_events_raw.append(event)
-            except ValueError: continue
+            except ValueError:
+                continue
         
-        todays_events = filter_and_deduplicate_events(todays_events_raw)
-        upcoming_events = filter_and_deduplicate_events(upcoming_events_raw)
+        todays_events = _filter_and_deduplicate_events(todays_events_raw)
+        upcoming_events = _filter_and_deduplicate_events(upcoming_events_raw)
 
         todays_events.sort(key=lambda x: (x.get('date'), x.get('time') or '99:99'))
         upcoming_events.sort(key=lambda x: (x.get('date'), x.get('time') or '99:99'))
-
-        message_parts = []
+        
+        final_message_parts = []
+        
         if todays_events:
-            message_parts.append("🎁 *Today's Airdrops*")
-            # Đếm số lần token xuất hiện để quyết định có show Phase không
-            today_token_counts = defaultdict(int)
-            for event in todays_events_raw:
-                today_token_counts[event.get('token')] += 1
+            final_message_parts.append("🎁 *Today's Airdrops*")
             for event in todays_events:
-                message_parts.append(format_event_message(event, price_data, today_token_counts))
+                final_message_parts.append(_format_event_message(event, price_data))
 
         if upcoming_events:
-            if message_parts: message_parts.append("\n" + "-"*25)
-            message_parts.append("🗓️ *Upcoming Airdrops*")
-            # Đếm số lần token xuất hiện
-            upcoming_token_counts = defaultdict(int)
-            for event in upcoming_events_raw:
-                upcoming_token_counts[event.get('token')] += 1
+            if final_message_parts: final_message_parts.append("\n" + "-"*25)
+            final_message_parts.append("🗓️ *Upcoming Airdrops*")
             for event in upcoming_events:
                 event_copy = event.copy()
                 event_date_obj = datetime.strptime(event_copy.get('date'), '%Y-%m-%d').date()
                 if event_date_obj == today_date + timedelta(days=1):
-                    event_copy['time'] = "Tomorrow (UTC)" if not event_copy.get('time') else event_copy['time']
+                    if not event_copy.get('time'):
+                        event_copy['time'] = "Tomorrow (UTC)"
                 
-                message_parts.append(format_event_message(event_copy, price_data, upcoming_token_counts))
+                final_message_parts.append(_format_event_message(event_copy, price_data))
 
-        if not message_parts:
-            return "ℹ️ Không có sự kiện airdrop nào phù hợp."
-        else:
-            return "\n".join(message_parts)
+        if not final_message_parts:
+            return "ℹ️ Không có sự kiện airdrop nào đáng chú ý trong hôm nay và các ngày sắp tới."
+        
+        return "\n".join(final_message_parts)
 
-    except requests.RequestException as e:
-        print(f"Request exception for Event API: {e}")
+    except requests.RequestException:
         return "❌ Lỗi mạng khi lấy dữ liệu sự kiện."
     except json.JSONDecodeError:
         return "❌ Dữ liệu trả về từ API sự kiện không hợp lệ."
