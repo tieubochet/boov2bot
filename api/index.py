@@ -43,7 +43,7 @@ except Exception as e:
 def get_airdrop_events() -> str:
     """
     Lấy và định dạng danh sách các sự kiện airdrop từ API,
-    đã loại bỏ hoàn toàn logic liên quan đến 'phase'.
+    hiển thị thời gian theo giờ Việt Nam (GMT+7).
     """
     AIRDROP_API_URL = "https://alpha123.uk/api/data?fresh=1"
     PRICE_API_URL = "https://alpha123.uk/api/price/?batch=today"
@@ -74,13 +74,36 @@ def get_airdrop_events() -> str:
                 processed[key] = event
         return list(processed.values())
 
+    # --- THAY ĐỔI LOGIC ĐỊNH DẠNG THỜI GIAN TẠI ĐÂY ---
     def _format_event_message(event, price_data):
-        """Định dạng tin nhắn cho một sự kiện."""
+        """Định dạng tin nhắn cho một sự kiện, chuyển đổi thời gian sang giờ Việt Nam."""
         token = event.get('token', 'N/A')
         name = event.get('name', 'N/A')
         points = event.get('points') or '-'
         amount_str = event.get('amount') or '-'
-        time = event.get('time') or 'TBA'
+        
+        time_from_api = event.get('time') or 'TBA'
+        date_from_api = event.get('date')
+        
+        # Chuyển đổi thời gian sang giờ Việt Nam
+        display_time = time_from_api
+        # Chỉ chuyển đổi nếu có ngày và thời gian có định dạng hợp lệ (chứa dấu :)
+        if date_from_api and ':' in time_from_api:
+            try:
+                # 1. Tạo đối tượng datetime ngây thơ (naive) từ chuỗi
+                naive_dt = datetime.strptime(f"{date_from_api} {time_from_api}", '%Y-%m-%d %H:%M')
+                
+                # 2. Gán múi giờ UTC cho nó
+                utc_dt = pytz.utc.localize(naive_dt)
+                
+                # 3. Chuyển đổi sang múi giờ Việt Nam
+                vietnam_dt = utc_dt.astimezone(TIMEZONE)
+                
+                # 4. Định dạng lại thành chuỗi HH:MM
+                display_time = vietnam_dt.strftime('%H:%M')
+            except (ValueError, pytz.exceptions.PytzError):
+                # Nếu có lỗi, giữ nguyên thời gian gốc từ API
+                display_time = time_from_api
 
         price_str, value_str = "", ""
         if token in price_data:
@@ -93,7 +116,7 @@ def get_airdrop_events() -> str:
                 except (ValueError, TypeError):
                     pass
         
-        time_str = f"`{time}`"
+        time_str = f"`{display_time}`"
         
         return (f"*{token} - {name}*{price_str}\n"
                 f"  Points: `{points}` | Amount: `{amount_str}`{value_str}\n"
@@ -165,8 +188,6 @@ def get_airdrop_events() -> str:
         return "❌ Lỗi mạng khi lấy dữ liệu sự kiện."
     except json.JSONDecodeError:
         return "❌ Dữ liệu trả về từ API sự kiện không hợp lệ."
-
-
 def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | None]:
     try:
         time_part, name_part = task_string.split(' - ', 1)
