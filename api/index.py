@@ -47,37 +47,44 @@ def get_airdrop_events() -> str:
         return "❌ Lỗi cấu hình: Thiếu `ALPHA123_COOKIE`. Vui lòng liên hệ admin."
 
     url = "https://alpha123.uk/api/data?fresh=1"
+    
+    ### <<< THAY ĐỔI: Bổ sung đầy đủ các header quan trọng ###
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Referer': 'https://alpha123.uk/index.html',
-        'Cookie': COOKIE
+        'authority': 'alpha123.uk',
+        'accept': 'application/json, text/plain, */*',
+        'accept-language': 'en-US,en;q=0.9',
+        'cookie': COOKIE,
+        'referer': 'https://alpha123.uk/index.html',
+        'sec-ch-ua': '"Not/A)Brand";v="99", "Google Chrome";v="139", "Chromium";v="139"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-origin',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
     }
     
     try:
         res = requests.get(url, headers=headers, timeout=20)
-
-        print(f"API Response Status Code: {res.status_code}")
-        print(f"API Response Body (first 500 chars): {res.text[:500]}")
-
         
+        # In log để debug
+        print(f"API Response Status Code: {res.status_code}")
         if res.status_code != 200:
-            return f"❌ Lỗi khi gọi API sự kiện (Code: {res.status_code}). Có thể cookie đã hết hạn."
+            print(f"API Response Body: {res.text[:500]}") # In ra nội dung lỗi
+            return f"❌ Lỗi khi gọi API sự kiện (Code: {res.status_code}). Nguyên nhân có thể là do cookie đã hết hạn hoặc IP bị chặn. Vui lòng thử lấy lại cookie mới."
         
         data = res.json()
         airdrops = data.get('airdrops', [])
         
         if not airdrops:
-            return "ℹ️ Không tìm thấy sự kiện airdrop nào."
+            return "ℹ️ Không tìm thấy sự kiện airdrop nào trong dữ liệu trả về."
 
         # Lọc ra các sự kiện trong tương lai
         upcoming_events = []
         now = datetime.now(TIMEZONE)
         for event in airdrops:
             try:
-                # Ghép ngày và giờ thành một chuỗi hoàn chỉnh
                 datetime_str = f"{event.get('date')} {event.get('time')}"
-                # Chuyển đổi thành đối tượng datetime có múi giờ
                 event_dt = TIMEZONE.localize(datetime.strptime(datetime_str, '%Y-%m-%d %H:%M'))
                 
                 if event_dt > now:
@@ -86,18 +93,14 @@ def get_airdrop_events() -> str:
                         'event_dt': event_dt
                     })
             except (ValueError, TypeError):
-                # Bỏ qua các sự kiện có định dạng ngày giờ không hợp lệ
                 continue
         
         if not upcoming_events:
             return "ℹ️ Không có sự kiện airdrop nào sắp tới."
             
-        # Sắp xếp các sự kiện theo thời gian
         upcoming_events.sort(key=lambda x: x['event_dt'])
         
-        # Định dạng kết quả
         message_parts = ["*🗓️ Các sự kiện Airdrop sắp tới:*"]
-        # Giới hạn hiển thị 10 sự kiện gần nhất
         for event in upcoming_events[:10]:
             name = event['name']
             dt = event['event_dt']
@@ -111,7 +114,7 @@ def get_airdrop_events() -> str:
         print(f"Request exception for Event API: {e}")
         return "❌ Lỗi mạng khi lấy dữ liệu sự kiện."
     except json.JSONDecodeError:
-        return "❌ Dữ liệu trả về từ API sự kiện không hợp lệ."
+        return "❌ Dữ liệu trả về từ API không phải là JSON. Có thể bạn đã bị chặn và nhận về trang HTML."
 
 
 def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | None]:
