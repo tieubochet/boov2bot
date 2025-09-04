@@ -143,7 +143,7 @@ def get_airdrop_events() -> str:
 
         if upcoming_events:
             if message_parts:
-                message_parts.append("\n\n" + "-"*25 + "\n")
+                message_parts.append("\n\n" + "-"*25 + "\n\n")
             
             upcoming_messages = []
             for event in upcoming_events:
