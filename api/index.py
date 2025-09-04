@@ -45,7 +45,7 @@ except Exception as e:
 def get_airdrop_events() -> str:
     """
     Lấy và định dạng danh sách các sự kiện airdrop từ API,
-    áp dụng quy tắc +8 giờ cho các sự kiện Phase 2.
+    áp dụng quy tắc +18 giờ cho các sự kiện Phase 2.
     """
     AIRDROP_API_URL = "https://alpha123.uk/api/data?fresh=1"
     PRICE_API_URL = "https://alpha123.uk/api/price/?batch=today"
@@ -77,27 +77,26 @@ def get_airdrop_events() -> str:
                 processed[key] = event
         return list(processed.values())
 
-    # --- HÀM TRỢ GIÚP MỚI: Xử lý logic thời gian phức tạp ---
+    # --- THAY ĐỔI LOGIC TÍNH TOÁN THỜI GIAN TẠI ĐÂY ---
     def _get_effective_event_time(event):
         """
         Trả về thời gian hiệu lực của sự kiện dưới dạng datetime object.
-        Áp dụng quy tắc +8 giờ cho phase 2.
+        Áp dụng quy tắc +18 giờ cho phase 2.
         Trả về None nếu không có thời gian cụ thể.
         """
         event_date_str = event.get('date')
         event_time_str = event.get('time')
 
         if not (event_date_str and event_time_str and ':' in event_time_str):
-            return None # Không có thời gian hợp lệ để xử lý
+            return None
 
         try:
             naive_dt = datetime.strptime(f"{event_date_str} {event_time_str}", '%Y-%m-%d %H:%M')
             
-            # QUY TẮC NGHIỆP VỤ: Nếu là phase 2, cộng thêm 8 giờ
+            # QUY TẮC NGHIỆP VỤ: Nếu là phase 2, cộng thêm 18 giờ
             if event.get('phase') == 2:
-                naive_dt += timedelta(hours=8)
+                naive_dt += timedelta(hours=18)
             
-            # Coi thời gian kết quả là giờ Việt Nam
             return TIMEZONE.localize(naive_dt)
         except (ValueError, pytz.exceptions.PytzError):
             return None
@@ -109,7 +108,6 @@ def get_airdrop_events() -> str:
         points = event.get('points') or '-'
         amount_str = event.get('amount') or '-'
 
-        # Hiển thị thời gian hiệu lực đã được tính toán
         display_time = effective_dt.strftime('%H:%M') if effective_dt else (event.get('time') or 'TBA')
 
         price_str, value_str = "", ""
@@ -140,35 +138,28 @@ def get_airdrop_events() -> str:
         airdrops = data.get('airdrops', [])
         if not airdrops: return "ℹ️ Không tìm thấy sự kiện airdrop nào."
 
-        # BƯỚC 1: Gom nhóm và loại bỏ các phase cũ NGAY TỪ ĐẦU
         definitive_events = _filter_and_deduplicate_events(airdrops)
-
         now_vietnam = datetime.now(TIMEZONE)
         today_date = now_vietnam.date()
         
         todays_events, upcoming_events = [], []
 
-        # BƯỚC 2: Phân loại các sự kiện đã được gom nhóm
         for event in definitive_events:
             effective_dt = _get_effective_event_time(event)
             
-            # Nếu không có thời gian hiệu lực, mặc định dùng ngày gốc từ API
-            effective_date = effective_dt.date() if effective_dt else datetime.strptime(event.get('date'), '%Y-%m-%d').date()
-
-            # Nếu thời gian hiệu lực đã qua, bỏ qua sự kiện này
+            # Bỏ qua sự kiện nếu thời gian hiệu lực đã qua
             if effective_dt and effective_dt < now_vietnam:
                 continue
+
+            # Dùng ngày từ API cho các sự kiện không có thời gian cụ thể (TBA)
+            event_day = effective_dt.date() if effective_dt else datetime.strptime(event.get('date'), '%Y-%m-%d').date()
             
-            # Phân loại sự kiện vào đúng nhóm dựa trên ngày hiệu lực
-            if effective_date == today_date:
-                 # Đính kèm thời gian hiệu lực để hàm format không cần tính lại
-                event['effective_dt'] = effective_dt
+            event['effective_dt'] = effective_dt
+            if event_day == today_date:
                 todays_events.append(event)
-            elif effective_date > today_date:
-                event['effective_dt'] = effective_dt
+            elif event_day > today_date:
                 upcoming_events.append(event)
 
-        # BƯỚC 3: Sắp xếp và định dạng kết quả
         todays_events.sort(key=lambda x: x['effective_dt'] or datetime.max.replace(tzinfo=TIMEZONE))
         upcoming_events.sort(key=lambda x: x['effective_dt'] or datetime.max.replace(tzinfo=TIMEZONE))
         
@@ -186,9 +177,8 @@ def get_airdrop_events() -> str:
             for event in upcoming_events:
                 effective_dt = event['effective_dt']
                 event_copy = event.copy()
-                # Xử lý trường hợp "Tomorrow (UTC)"
                 if effective_dt and effective_dt.date() == today_date + timedelta(days=1) and not event.get('time'):
-                    event_copy['time'] = "Tomorrow (UTC)" # Giữ nguyên hiển thị này
+                    event_copy['time'] = "Tomorrow (UTC)"
                 upcoming_messages.append(_format_event_message(event_copy, price_data, effective_dt))
 
             message_parts.append("🗓️ *Upcoming Airdrops:*\n\n")
