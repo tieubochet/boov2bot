@@ -40,6 +40,75 @@ try:
 except Exception as e:
     print(f"FATAL: Could not connect to Redis. Error: {e}"); kv = None
 # --- LOGIC QUẢN LÝ CÔNG VIỆC ---
+def get_airdrop_events() -> str:
+    """Lấy và định dạng danh sách các sự kiện airdrop sắp tới."""
+    COOKIE = os.getenv("ALPHA123_COOKIE")
+    if not COOKIE:
+        return "❌ Lỗi cấu hình: Thiếu `ALPHA123_COOKIE`. Vui lòng liên hệ admin."
+
+    url = "https://alpha123.uk/api/data?fresh=1"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Referer': 'https://alpha123.uk/index.html',
+        'Cookie': COOKIE
+    }
+    
+    try:
+        res = requests.get(url, headers=headers, timeout=20)
+        if res.status_code != 200:
+            return f"❌ Lỗi khi gọi API sự kiện (Code: {res.status_code}). Có thể cookie đã hết hạn."
+        
+        data = res.json()
+        airdrops = data.get('airdrops', [])
+        
+        if not airdrops:
+            return "ℹ️ Không tìm thấy sự kiện airdrop nào."
+
+        # Lọc ra các sự kiện trong tương lai
+        upcoming_events = []
+        now = datetime.now(TIMEZONE)
+        for event in airdrops:
+            try:
+                # Ghép ngày và giờ thành một chuỗi hoàn chỉnh
+                datetime_str = f"{event.get('date')} {event.get('time')}"
+                # Chuyển đổi thành đối tượng datetime có múi giờ
+                event_dt = TIMEZONE.localize(datetime.strptime(datetime_str, '%Y-%m-%d %H:%M'))
+                
+                if event_dt > now:
+                    upcoming_events.append({
+                        'name': event.get('name', 'N/A'),
+                        'event_dt': event_dt
+                    })
+            except (ValueError, TypeError):
+                # Bỏ qua các sự kiện có định dạng ngày giờ không hợp lệ
+                continue
+        
+        if not upcoming_events:
+            return "ℹ️ Không có sự kiện airdrop nào sắp tới."
+            
+        # Sắp xếp các sự kiện theo thời gian
+        upcoming_events.sort(key=lambda x: x['event_dt'])
+        
+        # Định dạng kết quả
+        message_parts = ["*🗓️ Các sự kiện Airdrop sắp tới:*"]
+        # Giới hạn hiển thị 10 sự kiện gần nhất
+        for event in upcoming_events[:10]:
+            name = event['name']
+            dt = event['event_dt']
+            date_str = dt.strftime('%d/%m/%Y')
+            time_str = dt.strftime('%H:%M')
+            message_parts.append(f"\n\n- *{name}*\n  `{date_str}` - `{time_str}`")
+            
+        return "".join(message_parts)
+
+    except requests.RequestException as e:
+        print(f"Request exception for Event API: {e}")
+        return "❌ Lỗi mạng khi lấy dữ liệu sự kiện."
+    except json.JSONDecodeError:
+        return "❌ Dữ liệu trả về từ API sự kiện không hợp lệ."
+
+
 def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | None]:
     try:
         time_part, name_part = task_string.split(' - ', 1)
@@ -657,6 +726,7 @@ def webhook():
                              "`/calc <ký hiệu> <số lượng>`\n"
                              "`/gt <thuật ngữ>`\n"
                              "`/tr <nội dung>`\n"
+                             "`/event` - Xem lịch airdrop sắp tới\n"
                              "`/perp <ký hiệu>`\n"
                              "`/alert <contract> <%>`\n"
                              "`/unalert <contract>`\n"
@@ -718,6 +788,11 @@ def webhook():
                 text_to_translate = " ".join(parts[1:])
                 temp_msg_id = send_telegram_message(chat_id, text="⏳ Đang dịch, đợi tí fen...", reply_to_message_id=msg_id)
                 if temp_msg_id: edit_telegram_message(chat_id, temp_msg_id, text=translate_crypto_text(text_to_translate))
+        elif cmd == '/event':
+            temp_msg_id = send_telegram_message(chat_id, text="🔍 Đang tìm sự kiện airdrop...", reply_to_message_id=msg_id)
+            if temp_msg_id:
+                result = get_airdrop_events()
+                edit_telegram_message(chat_id, temp_msg_id, text=result)
         elif cmd == '/folio':
             # Hàm process_folio_text giờ sẽ xử lý toàn bộ tin nhắn
             result = process_folio_text(text)
