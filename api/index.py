@@ -949,7 +949,7 @@ def check_events_and_notify_groups():
         if event_time > now:
             time_until_event = event_time - now
             
-            if timedelta(minutes=0) < time_until_event <= timedelta(minutes=1440):
+            if timedelta(minutes=0) < time_until_event <= timedelta(minutes=REMINDER_THRESHOLD_MINUTES):
                 event_id = f"{event.get('token')}-{event_time.isoformat()}"
                 
                 for chat_id in subscribers:
