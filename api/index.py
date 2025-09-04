@@ -95,7 +95,7 @@ def get_airdrop_events() -> str:
         
         time_str = f"`{time}`"
         
-        return (f"- *{token} - {name}*{price_str}\n"
+        return (f"*{token} - {name}*{price_str}\n"
                 f"  Points: `{points}` | Amount: `{amount_str}`{value_str}\n"
                 f"  Time: {time_str}")
 
