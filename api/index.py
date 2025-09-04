@@ -41,8 +41,6 @@ try:
 except Exception as e:
     print(f"FATAL: Could not connect to Redis. Error: {e}"); kv = None
 # --- LOGIC QUẢN LÝ CÔNG VIỆC ---
-# --- THAY THẾ TOÀN BỘ KHỐI HÀM get_airdrop_events BẰNG KHỐI NÀY ---
-
 def _get_processed_airdrop_events():
     """
     Hàm nội bộ: Lấy và xử lý dữ liệu airdrop, trả về danh sách các sự kiện
@@ -74,7 +72,7 @@ def _get_processed_airdrop_events():
                 processed[key] = event
         return list(processed.values())
 
-    # --- SỬA LỖI XỬ LÝ THỜI GIAN TẠI ĐÂY ---
+    # --- THAY ĐỔI LOGIC MÚI GIỜ TẠI ĐÂY ---
     def _get_effective_event_time(event):
         """
         Trả về thời gian hiệu lực của sự kiện dưới dạng datetime object (đã ở múi giờ Việt Nam).
@@ -85,22 +83,21 @@ def _get_processed_airdrop_events():
         if not (event_date_str and event_time_str and ':' in event_time_str):
             return None
         try:
-            # SỬA LỖI 1: Làm sạch chuỗi thời gian, chỉ lấy phần đầu tiên
-            # Điều này sẽ chuyển "13:00 Delay" thành "13:00"
-            cleaned_time_str = event_time_str.strip().split()[0]
-
-            naive_dt = datetime.strptime(f"{event_date_str} {cleaned_time_str}", '%Y-%m-%d %H:%M')
+            # 1. Tạo datetime object ngây thơ (naive)
+            naive_dt = datetime.strptime(f"{event_date_str} {event_time_str}", '%Y-%m-%d %H:%M')
             
+            # 2. Áp dụng quy tắc nghiệp vụ (+18 giờ cho phase 2)
             if event.get('phase') == 2:
                 naive_dt += timedelta(hours=18)
             
+            # 3. Gán múi giờ gốc (Trung Quốc) cho nó để nó "nhận biết" múi giờ
             china_dt = CHINA_TIMEZONE.localize(naive_dt)
+            
+            # 4. Chuyển đổi sang múi giờ đích (Việt Nam)
             vietnam_dt = china_dt.astimezone(TIMEZONE)
             
             return vietnam_dt
-        # SỬA LỖI 2: Sửa lại khối except để bắt lỗi chính xác
-        except Exception:
-            # Bắt tất cả các lỗi (ValueError, pytz errors, etc.) và trả về None
+        except (ValueError, pytz.exceptions.PytzError):
             return None
 
     try:
@@ -160,12 +157,7 @@ def get_airdrop_events() -> str:
         effective_dt = event['effective_dt']
         if effective_dt and effective_dt < now_vietnam: continue
         
-        # Sửa lại logic để xử lý an toàn trường hợp không có ngày
-        event_date_str = event.get('date')
-        if not event_date_str: continue
-        
-        event_day = effective_dt.date() if effective_dt else datetime.strptime(event_date_str, '%Y-%m-%d').date()
-
+        event_day = effective_dt.date() if effective_dt else datetime.strptime(event.get('date'), '%Y-%m-%d').date()
         if event_day == today_date:
             todays_events.append(event)
         elif event_day > today_date:
@@ -197,8 +189,6 @@ def get_airdrop_events() -> str:
         return "ℹ️ Không có sự kiện airdrop nào đáng chú ý trong hôm nay và các ngày sắp tới."
     
     return "".join(message_parts)
-
-# --- KẾT THÚC KHỐI CODE THAY THẾ ---
 
 
 def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | None]:
