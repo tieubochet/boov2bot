@@ -127,6 +127,7 @@ def _get_processed_airdrop_events():
 def get_airdrop_events() -> str:
     """
     Hàm giao diện: Gọi hàm logic cốt lõi và định dạng kết quả thành tin nhắn cho người dùng.
+    Hiển thị thêm ngày cho các sự kiện Upcoming.
     """
     processed_events, error_message = _get_processed_airdrop_events()
     if error_message:
@@ -134,11 +135,27 @@ def get_airdrop_events() -> str:
     if not processed_events:
         return "ℹ️ Không tìm thấy sự kiện airdrop nào."
 
-    def _format_event_message(event, price_data, effective_dt):
+    # --- THAY ĐỔI LOGIC ĐỊNH DẠNG TẠI ĐÂY ---
+    def _format_event_message(event, price_data, effective_dt, include_date=False):
+        """
+        Định dạng tin nhắn cho một sự kiện.
+        :param include_date: Nếu True, sẽ hiển thị cả ngày (DD/MM).
+        """
         token, name = event.get('token', 'N/A'), event.get('name', 'N/A')
         points, amount_str = event.get('points') or '-', event.get('amount') or '-'
-        display_time = effective_dt.strftime('%H:%M') if effective_dt else (event.get('time') or 'TBA')
-
+        
+        # Xử lý chuỗi thời gian hiển thị
+        display_time = event.get('time') or 'TBA'
+        if event.get('time') == "Tomorrow (UTC)":
+             display_time = "Tomorrow (UTC)"
+        elif effective_dt:
+            time_part = effective_dt.strftime('%H:%M')
+            if include_date:
+                date_part = effective_dt.strftime('%d/%m')
+                display_time = f"{time_part} {date_part}"
+            else:
+                display_time = time_part
+        
         price_str, value_str = "", ""
         if token in price_data:
             price_value = price_data[token].get('dex_price') or price_data[token].get('price', 0)
@@ -168,7 +185,7 @@ def get_airdrop_events() -> str:
         try:
             event_day = effective_dt.date() if effective_dt else datetime.strptime(event_date_str, '%Y-%m-%d').date()
         except ValueError:
-            continue # Bỏ qua nếu ngày không hợp lệ
+            continue
 
         if event_day == today_date:
             todays_events.append(event)
@@ -182,6 +199,7 @@ def get_airdrop_events() -> str:
     price_data = processed_events[0]['price_data'] if processed_events else {}
     
     if todays_events:
+        # Gọi hàm format cho Today's events, không có include_date (mặc định là False)
         today_messages = [_format_event_message(e, price_data, e['effective_dt']) for e in todays_events]
         message_parts.append("🎁 *Today's Airdrops:*\n\n" + "\n\n".join(today_messages))
 
@@ -194,7 +212,11 @@ def get_airdrop_events() -> str:
             event_copy = event.copy()
             if effective_dt and effective_dt.date() == today_date + timedelta(days=1) and not event.get('time'):
                 event_copy['time'] = "Tomorrow (UTC)"
-            upcoming_messages.append(_format_event_message(event_copy, price_data, effective_dt))
+            
+            # --- THAY ĐỔI KHI GỌI HÀM ---
+            # Gọi hàm format cho Upcoming events, với include_date=True
+            upcoming_messages.append(_format_event_message(event_copy, price_data, effective_dt, include_date=True))
+            
         message_parts.append("🗓️ *Upcoming Airdrops:*\n\n" + "\n\n".join(upcoming_messages))
 
     if not message_parts:
