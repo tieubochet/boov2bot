@@ -125,6 +125,69 @@ def _get_processed_airdrop_events():
     except requests.RequestException: return None, "❌ Lỗi mạng khi lấy dữ liệu sự kiện."
     except json.JSONDecodeError: return None, "❌ Dữ liệu trả về từ API sự kiện không hợp lệ."
 
+def _get_processed_airdrop_events():
+    """
+    Hàm nội bộ: Lấy và xử lý dữ liệu airdrop, trả về danh sách các sự kiện
+    đã được lọc với thời gian hiệu lực đã được tính toán.
+    Đây là hàm logic cốt lõi.
+    """
+    AIRDROP_API_URL = "https://alpha123.uk/api/data?fresh=1"
+    PRICE_API_URL = "https://alpha123.uk/api/price/?batch=today"
+    HEADERS = {
+      'referer': 'https://alpha123.uk/index.html',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+
+    def _get_price_data():
+        try:
+            res = requests.get(PRICE_API_URL, headers=HEADERS, timeout=10)
+            if res.status_code == 200:
+                price_json = res.json()
+                if price_json.get('success') and 'prices' in price_json:
+                    return price_json['prices']
+        except Exception: pass
+        return {}
+
+    # SỬA LỖI: Hàm _filter_and_deduplicate_events đã bị XÓA BỎ.
+
+    def _get_effective_event_time(event):
+        """
+        Trả về thời gian hiệu lực của sự kiện dưới dạng datetime object (đã ở múi giờ Việt Nam).
+        """
+        event_date_str = event.get('date')
+        event_time_str = event.get('time')
+        if not (event_date_str and event_time_str and ':' in event_time_str):
+            return None
+        try:
+            cleaned_time_str = event_time_str.strip().split()[0]
+            naive_dt = datetime.strptime(f"{event_date_str} {cleaned_time_str}", '%Y-%m-%d %H:%M')
+            if event.get('phase') == 2:
+                naive_dt += timedelta(hours=18)
+            china_dt = CHINA_TIMEZONE.localize(naive_dt)
+            vietnam_dt = china_dt.astimezone(TIMEZONE)
+            return vietnam_dt
+        except Exception:
+            return None
+
+    try:
+        airdrop_res = requests.get(AIRDROP_API_URL, headers=HEADERS, timeout=20)
+        if airdrop_res.status_code != 200: return None, f"❌ Lỗi khi gọi API sự kiện (Code: {airdrop_res.status_code})."
+        
+        data = airdrop_res.json()
+        airdrops = data.get('airdrops', [])
+        if not airdrops: return [], None
+
+        price_data = _get_price_data()
+        
+        # SỬA LỖI: Không còn gom nhóm. Xử lý trực tiếp danh sách 'airdrops'
+        for event in airdrops:
+            event['effective_dt'] = _get_effective_event_time(event)
+            event['price_data'] = price_data
+
+        return airdrops, None
+    except requests.RequestException: return None, "❌ Lỗi mạng khi lấy dữ liệu sự kiện."
+    except json.JSONDecodeError: return None, "❌ Dữ liệu trả về từ API sự kiện không hợp lệ."
+
 def get_airdrop_events() -> str:
     """
     Hàm giao diện: Gọi hàm logic cốt lõi và định dạng kết quả thành tin nhắn cho người dùng.
@@ -136,20 +199,15 @@ def get_airdrop_events() -> str:
     if not processed_events:
         return "ℹ️ Không tìm thấy sự kiện airdrop nào."
 
-    # --- THAY ĐỔI LOGIC ĐỊNH DẠNG TẠI ĐÂY ---
     def _format_event_message(event, price_data, effective_dt, include_date=False):
-        """
-        Định dạng tin nhắn cho một sự kiện.
-        :param include_date: Nếu True, sẽ hiển thị cả ngày (DD/MM).
-        """
         token, name = event.get('token', 'N/A'), event.get('name', 'N/A')
         points, amount_str = event.get('points') or '-', event.get('amount') or '-'
         
-        # Xử lý chuỗi thời gian hiển thị
         display_time = event.get('time') or 'TBA'
-        if event.get('time') == "Tomorrow (UTC)":
-             display_time = "Tomorrow (UTC)"
-        elif effective_dt:
+        # Xử lý đặc biệt cho các chuỗi không phải thời gian
+        is_special_time = "Tomorrow" in display_time or "Day after" in display_time
+        
+        if effective_dt and not is_special_time:
             time_part = effective_dt.strftime('%H:%M')
             if include_date:
                 date_part = effective_dt.strftime('%d/%m')
@@ -193,14 +251,13 @@ def get_airdrop_events() -> str:
         elif event_day > today_date:
             upcoming_events.append(event)
 
-    todays_events.sort(key=lambda x: x['effective_dt'] or datetime.max.replace(tzinfo=TIMEZONE))
-    upcoming_events.sort(key=lambda x: x['effective_dt'] or datetime.max.replace(tzinfo=TIMEZONE))
+    todays_events.sort(key=lambda x: x.get('effective_dt') or datetime.max.replace(tzinfo=TIMEZONE))
+    upcoming_events.sort(key=lambda x: x.get('effective_dt') or datetime.max.replace(tzinfo=TIMEZONE))
     
     message_parts = []
     price_data = processed_events[0]['price_data'] if processed_events else {}
     
     if todays_events:
-        # Gọi hàm format cho Today's events, không có include_date (mặc định là False)
         today_messages = [_format_event_message(e, price_data, e['effective_dt']) for e in todays_events]
         message_parts.append("🎁 *Today's Airdrops:*\n\n" + "\n\n".join(today_messages))
 
@@ -210,13 +267,8 @@ def get_airdrop_events() -> str:
         upcoming_messages = []
         for event in upcoming_events:
             effective_dt = event['effective_dt']
-            event_copy = event.copy()
-            if effective_dt and effective_dt.date() == today_date + timedelta(days=1) and not event.get('time'):
-                event_copy['time'] = "Tomorrow (UTC)"
-            
-            # --- THAY ĐỔI KHI GỌI HÀM ---
             # Gọi hàm format cho Upcoming events, với include_date=True
-            upcoming_messages.append(_format_event_message(event_copy, price_data, effective_dt, include_date=True))
+            upcoming_messages.append(_format_event_message(event, price_data, effective_dt, include_date=True))
             
         message_parts.append("🗓️ *Upcoming Airdrops:*\n\n" + "\n\n".join(upcoming_messages))
 
