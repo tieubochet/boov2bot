@@ -880,9 +880,33 @@ def webhook():
     data = request.get_json()
     if "callback_query" in data:
         cb = data["callback_query"]; answer_callback_query(cb["id"])
+        
+        # Logic xử lý refresh portfolio cũ
         if cb.get("data") == "refresh_portfolio" and "reply_to_message" in cb["message"]:
             result = process_portfolio_text(cb["message"]["reply_to_message"]["text"])
             if result: edit_telegram_message(cb["message"]["chat"]["id"], cb["message"]["message_id"], text=result, reply_markup=cb["message"]["reply_markup"])
+        
+        # --- THÊM LOGIC MỚI ĐỂ XỬ LÝ REFRESH SỰ KIỆN ---
+        elif cb.get("data") == "refresh_events":
+            # 1. Hiển thị thông báo nhỏ "Đang tải..." cho người dùng
+            # (answer_callback_query đã được gọi ở trên)
+            
+            # 2. Lấy lại danh sách sự kiện mới nhất
+            new_text = get_airdrop_events()
+            
+            # 3. Lấy nội dung tin nhắn cũ để so sánh
+            old_text = cb["message"]["text"]
+            
+            # 4. Chỉ cập nhật nếu nội dung có thay đổi (tối ưu hóa)
+            if new_text != old_text:
+                edit_telegram_message(
+                    chat_id=cb["message"]["chat"]["id"],
+                    msg_id=cb["message"]["message_id"],
+                    text=new_text,
+                    # Gửi lại cấu trúc nút bấm để nó không bị biến mất
+                    reply_markup=json.dumps(cb["message"]["reply_markup"])
+                )
+                
         return jsonify(success=True)
     if "message" not in data or "text" not in data["message"]: return jsonify(success=True)
     chat_id = data["message"]["chat"]["id"]; msg_id = data["message"]["message_id"]
@@ -986,7 +1010,20 @@ def webhook():
             temp_msg_id = send_telegram_message(chat_id, text="🔍 Đang tìm sự kiện airdrop...", reply_to_message_id=msg_id)
             if temp_msg_id:
                 result = get_airdrop_events()
-                edit_telegram_message(chat_id, temp_msg_id, text=result)
+                
+                # --- THAY ĐỔI LOGIC TẠO NÚT BẤM TẠI ĐÂY ---
+                # Tạo một bàn phím với 2 nút trên cùng một hàng
+                reply_markup = {
+                    'inline_keyboard': [
+                        [ # Hàng đầu tiên
+                            {'text': '🔄 Refresh', 'callback_data': 'refresh_events'},
+                            {'text': '🚀 Trade on Hyperliquid', 'url': 'https://app.hyperliquid.xyz/join/TIEUBOCHET'}
+                        ]
+                    ]
+                }
+                
+                # Sửa tin nhắn "Đang tìm..." với kết quả và BÀN PHÍM MỚI
+                edit_telegram_message(chat_id, temp_msg_id, text=result, reply_markup=json.dumps(reply_markup))
         elif cmd == '/folio':
             # Hàm process_folio_text giờ sẽ xử lý toàn bộ tin nhắn
             result = process_folio_text(text)
