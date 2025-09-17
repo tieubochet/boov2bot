@@ -23,7 +23,8 @@ SYMBOL_TO_ID_MAP = {
     'ondo':'ondo-finance', 'virtual':'virtual-protocol', 'trx':'tron', 'towns':'towns',
     'in': 'infinit', 'yala': 'yala', 'vra':'verasity', 'tipn':'tipn', 'era':'caldera',
     'talent':'talent-protocol', 'bas':'bas', 'ron':'ronin', 'dolo':'dolomite', 'wod':'world-of-dypians',
-    'zent':'zentry','wod':'world-of-dypians', 'open':'openledger-2', 'mirror':'black-mirror'
+    'zent':'zentry','wod':'world-of-dypians', 'open':'openledger-2', 'mirror':'black-mirror',
+    'wct':'connect-token-wct', 'stbl':'stbl'
 }
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
