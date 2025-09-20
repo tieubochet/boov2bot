@@ -226,7 +226,7 @@ def get_airdrop_events() -> tuple[str, str | None]:
                 except (ValueError, TypeError): pass
         
         time_str = f"`{display_time}`"
-        return (f"*{token} - {name}*{price_str}\n"
+        return (f"*{name}{(token):}*{price_str}\n"
                 f"  Points: `{points}` | Amount: `{amount_str}`{value_str}\n"
                 f"  Time: {time_str}")
 
