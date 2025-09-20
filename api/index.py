@@ -189,23 +189,22 @@ def _get_processed_airdrop_events():
     except requests.RequestException: return None, "❌ Lỗi mạng khi lấy dữ liệu sự kiện."
     except json.JSONDecodeError: return None, "❌ Dữ liệu trả về từ API sự kiện không hợp lệ."
 
-def get_airdrop_events() -> str:
+def get_airdrop_events() -> tuple[str, str | None]:
     """
-    Hàm giao diện: Gọi hàm logic cốt lõi và định dạng kết quả thành tin nhắn cho người dùng.
-    Hiển thị thêm ngày cho các sự kiện Upcoming.
+    Hàm giao diện: Gọi hàm logic cốt lõi và định dạng kết quả.
+    Trả về: (tin nhắn đã định dạng, token của sự kiện sắp tới gần nhất).
     """
     processed_events, error_message = _get_processed_airdrop_events()
     if error_message:
-        return error_message
+        return error_message, None
     if not processed_events:
-        return "ℹ️ Không tìm thấy sự kiện airdrop nào."
+        return "ℹ️ Không tìm thấy sự kiện airdrop nào.", None
 
     def _format_event_message(event, price_data, effective_dt, include_date=False):
         token, name = event.get('token', 'N/A'), event.get('name', 'N/A')
         points, amount_str = event.get('points') or '-', event.get('amount') or '-'
         
         display_time = event.get('time') or 'TBA'
-        # Xử lý đặc biệt cho các chuỗi không phải thời gian
         is_special_time = "Tomorrow" in display_time or "Day after" in display_time
         
         if effective_dt and not is_special_time:
@@ -255,6 +254,11 @@ def get_airdrop_events() -> str:
     todays_events.sort(key=lambda x: x.get('effective_dt') or datetime.max.replace(tzinfo=TIMEZONE))
     upcoming_events.sort(key=lambda x: x.get('effective_dt') or datetime.max.replace(tzinfo=TIMEZONE))
     
+    # --- LOGIC MỚI: TÌM TOKEN SẮP TỚI GẦN NHẤT ---
+    next_upcoming_token = None
+    if upcoming_events:
+        next_upcoming_token = upcoming_events[0].get('token')
+
     message_parts = []
     price_data = processed_events[0]['price_data'] if processed_events else {}
     
@@ -268,15 +272,15 @@ def get_airdrop_events() -> str:
         upcoming_messages = []
         for event in upcoming_events:
             effective_dt = event['effective_dt']
-            # Gọi hàm format cho Upcoming events, với include_date=True
             upcoming_messages.append(_format_event_message(event, price_data, effective_dt, include_date=True))
             
         message_parts.append("🗓️ *Upcoming Airdrops:*\n\n" + "\n\n".join(upcoming_messages))
 
-    if not message_parts:
-        return "ℹ️ Không có sự kiện airdrop nào đáng chú ý trong hôm nay và các ngày sắp tới."
+    final_message = "".join(message_parts)
+    if not final_message:
+        final_message = "ℹ️ Không có sự kiện airdrop nào đáng chú ý trong hôm nay và các ngày sắp tới."
     
-    return "".join(message_parts)
+    return final_message, next_upcoming_token
 
 def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | None]:
     try:
@@ -882,30 +886,36 @@ def webhook():
     if "callback_query" in data:
         cb = data["callback_query"]; answer_callback_query(cb["id"])
         
-        # Logic xử lý refresh portfolio cũ
         if cb.get("data") == "refresh_portfolio" and "reply_to_message" in cb["message"]:
             result = process_portfolio_text(cb["message"]["reply_to_message"]["text"])
             if result: edit_telegram_message(cb["message"]["chat"]["id"], cb["message"]["message_id"], text=result, reply_markup=cb["message"]["reply_markup"])
         
-        # --- THÊM LOGIC MỚI ĐỂ XỬ LÝ REFRESH SỰ KIỆN ---
         elif cb.get("data") == "refresh_events":
-            # 1. Hiển thị thông báo nhỏ "Đang tải..." cho người dùng
-            # (answer_callback_query đã được gọi ở trên)
-            
-            # 2. Lấy lại danh sách sự kiện mới nhất
-            new_text = get_airdrop_events()
-            
-            # 3. Lấy nội dung tin nhắn cũ để so sánh
+            # 1. Lấy lại dữ liệu mới và token tiếp theo
+            new_text, new_next_token = get_airdrop_events()
             old_text = cb["message"]["text"]
             
-            # 4. Chỉ cập nhật nếu nội dung có thay đổi (tối ưu hóa)
+            # 2. Tạo nhãn nút bấm động mới
+            button_label = "🚀 Trade on Hyperliquid"
+            if new_next_token:
+                button_label = f"🚀 Trade {new_next_token.upper()} on Hyperliquid"
+            
+            # 3. Tạo lại toàn bộ bàn phím mới
+            new_reply_markup = {
+                'inline_keyboard': [
+                    [
+                        {'text': button_label, 'url': 'https://app.hyperliquid.xyz/join/TIEUBOCHET'}
+                    ]
+                ]
+            }
+            
+            # 4. Chỉ cập nhật nếu có thay đổi
             if new_text != old_text:
                 edit_telegram_message(
                     chat_id=cb["message"]["chat"]["id"],
                     msg_id=cb["message"]["message_id"],
                     text=new_text,
-                    # Gửi lại cấu trúc nút bấm để nó không bị biến mất
-                    reply_markup=json.dumps(cb["message"]["reply_markup"])
+                    reply_markup=json.dumps(new_reply_markup)
                 )
                 
         return jsonify(success=True)
