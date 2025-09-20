@@ -889,35 +889,6 @@ def webhook():
         if cb.get("data") == "refresh_portfolio" and "reply_to_message" in cb["message"]:
             result = process_portfolio_text(cb["message"]["reply_to_message"]["text"])
             if result: edit_telegram_message(cb["message"]["chat"]["id"], cb["message"]["message_id"], text=result, reply_markup=cb["message"]["reply_markup"])
-        
-        elif cb.get("data") == "refresh_events":
-            # 1. Lấy lại dữ liệu mới và token tiếp theo
-            new_text, new_next_token = get_airdrop_events()
-            old_text = cb["message"]["text"]
-            
-            # 2. Tạo nhãn nút bấm động mới
-            button_label = "🚀 Trade on Hyperliquid"
-            if new_next_token:
-                button_label = f"🚀 Trade {new_next_token.upper()} on Hyperliquid"
-            
-            # 3. Tạo lại toàn bộ bàn phím mới
-            new_reply_markup = {
-                'inline_keyboard': [
-                    [
-                        {'text': button_label, 'url': 'https://app.hyperliquid.xyz/join/TIEUBOCHET'}
-                    ]
-                ]
-            }
-            
-            # 4. Chỉ cập nhật nếu có thay đổi
-            if new_text != old_text:
-                edit_telegram_message(
-                    chat_id=cb["message"]["chat"]["id"],
-                    msg_id=cb["message"]["message_id"],
-                    text=new_text,
-                    reply_markup=json.dumps(new_reply_markup)
-                )
-                
         return jsonify(success=True)
     if "message" not in data or "text" not in data["message"]: return jsonify(success=True)
     chat_id = data["message"]["chat"]["id"]; msg_id = data["message"]["message_id"]
@@ -1020,7 +991,7 @@ def webhook():
         elif cmd == '/event':
             temp_msg_id = send_telegram_message(chat_id, text="🔍 Đang tìm sự kiện airdrop...", reply_to_message_id=msg_id)
             if temp_msg_id:
-                # 1. Lấy dữ liệu và token tiếp theo
+                # 1. Lấy dữ liệu và token của sự kiện sắp tới
                 result, next_token = get_airdrop_events()
                 
                 # 2. Tạo nhãn nút bấm động
@@ -1028,10 +999,10 @@ def webhook():
                 if next_token:
                     button_label = f"🚀 Trade {next_token.upper()} on Hyperliquid"
                 
-                # 3. Tạo bàn phím với nhãn động
+                # 3. Tạo bàn phím chỉ với một nút duy nhất
                 reply_markup = {
                     'inline_keyboard': [
-                        [
+                        [ # Một hàng chứa một nút
                             {'text': button_label, 'url': 'https://app.hyperliquid.xyz/join/TIEUBOCHET'}
                         ]
                     ]
