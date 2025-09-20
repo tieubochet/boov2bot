@@ -219,7 +219,7 @@ def get_airdrop_events() -> tuple[str, str | None]:
         if token in price_data:
             price_value = price_data[token].get('dex_price') or price_data[token].get('price', 0)
             if price_value > 0:
-                price_str = f" (`${price_value:,.4f}`)"
+                price_str = f" `${price_value:,.4f}`"
                 try:
                     value = float(amount_str) * price_value
                     value_str = f"\n  Value: `${value:,.2f}`"
