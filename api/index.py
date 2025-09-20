@@ -192,7 +192,7 @@ def _get_processed_airdrop_events():
 def get_airdrop_events() -> tuple[str, str | None]:
     """
     Hàm giao diện: Gọi hàm logic cốt lõi và định dạng kết quả.
-    Trả về: (tin nhắn đã định dạng, token của sự kiện sắp tới gần nhất).
+    Trả về: (tin nhắn đã định dạng, token của sự kiện gần nhất).
     """
     processed_events, error_message = _get_processed_airdrop_events()
     if error_message:
@@ -254,10 +254,12 @@ def get_airdrop_events() -> tuple[str, str | None]:
     todays_events.sort(key=lambda x: x.get('effective_dt') or datetime.max.replace(tzinfo=TIMEZONE))
     upcoming_events.sort(key=lambda x: x.get('effective_dt') or datetime.max.replace(tzinfo=TIMEZONE))
     
-    # --- LOGIC MỚI: TÌM TOKEN SẮP TỚI GẦN NHẤT ---
-    next_upcoming_token = None
-    if upcoming_events:
-        next_upcoming_token = upcoming_events[0].get('token')
+    # --- SỬA LỖI LOGIC: TÌM SỰ KIỆN GẦN NHẤT TỪ CẢ HAI DANH SÁCH ---
+    next_event_token = None
+    all_future_events = todays_events + upcoming_events  # Gộp 2 danh sách đã sắp xếp
+    if all_future_events:
+        # Sự kiện đầu tiên trong danh sách gộp chính là sự kiện gần nhất
+        next_event_token = all_future_events[0].get('token')
 
     message_parts = []
     price_data = processed_events[0]['price_data'] if processed_events else {}
@@ -280,7 +282,7 @@ def get_airdrop_events() -> tuple[str, str | None]:
     if not final_message:
         final_message = "ℹ️ Không có sự kiện airdrop nào đáng chú ý trong hôm nay và các ngày sắp tới."
     
-    return final_message, next_upcoming_token
+    return final_message, next_event_token
 
 def parse_task_from_string(task_string: str) -> tuple[datetime | None, str | None]:
     try:
