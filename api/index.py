@@ -1020,20 +1020,23 @@ def webhook():
         elif cmd == '/event':
             temp_msg_id = send_telegram_message(chat_id, text="🔍 Đang tìm sự kiện airdrop...", reply_to_message_id=msg_id)
             if temp_msg_id:
-                result = get_airdrop_events()
+                # 1. Lấy dữ liệu và token tiếp theo
+                result, next_token = get_airdrop_events()
                 
-                # --- THAY ĐỔI LOGIC TẠO NÚT BẤM TẠI ĐÂY ---
-                # Tạo một bàn phím với 2 nút trên cùng một hàng
+                # 2. Tạo nhãn nút bấm động
+                button_label = "🚀 Trade on Hyperliquid"
+                if next_token:
+                    button_label = f"🚀 Trade {next_token.upper()} on Hyperliquid"
+                
+                # 3. Tạo bàn phím với nhãn động
                 reply_markup = {
                     'inline_keyboard': [
-                        [ # Hàng đầu tiên
-                            {'text': '🔄 Refresh', 'callback_data': 'refresh_events'},
-                            {'text': '🚀 Trade on Hyperliquid', 'url': 'https://app.hyperliquid.xyz/join/TIEUBOCHET'}
+                        [
+                            {'text': button_label, 'url': 'https://app.hyperliquid.xyz/join/TIEUBOCHET'}
                         ]
                     ]
                 }
                 
-                # Sửa tin nhắn "Đang tìm..." với kết quả và BÀN PHÍM MỚI
                 edit_telegram_message(chat_id, temp_msg_id, text=result, reply_markup=json.dumps(reply_markup))
         elif cmd == '/folio':
             # Hàm process_folio_text giờ sẽ xử lý toàn bộ tin nhắn
