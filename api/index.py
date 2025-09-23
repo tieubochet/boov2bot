@@ -991,7 +991,7 @@ def webhook():
                 temp_msg_id = send_telegram_message(chat_id, text="⏳ Đang dịch, đợi tí fen...", reply_to_message_id=msg_id)
                 if temp_msg_id: edit_telegram_message(chat_id, temp_msg_id, text=translate_crypto_text(text_to_translate))
         elif cmd == '/event':
-            temp_msg_id = send_telegram_message(chat_id, text="🔍 Đang tìm sự kiện airdrop...", reply_to_message_id=msg_id)
+            temp_msg_id = send_telegram_message(chat_id, text="🔍 Teeboo đang tìm, đợi tí fen 😏", reply_to_message_id=msg_id)
             if temp_msg_id:
                 # 1. Lấy dữ liệu và token của sự kiện sắp tới
                 result, next_token = get_airdrop_events()
