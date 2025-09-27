@@ -24,7 +24,7 @@ SYMBOL_TO_ID_MAP = {
     'in': 'infinit', 'yala': 'yala', 'vra':'verasity', 'tipn':'tipn', 'era':'caldera',
     'talent':'talent-protocol', 'bas':'bas', 'ron':'ronin', 'dolo':'dolomite', 'wod':'world-of-dypians',
     'zent':'zentry','wod':'world-of-dypians', 'open':'openledger-2', 'mirror':'black-mirror',
-    'wct':'connect-token-wct', 'stbl':'stbl', 'synd':'syndicate-3'
+    'wct':'connect-token-wct', 'stbl':'stbl', 'synd':'syndicate-3', 'mira':'mira-3'
 }
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
