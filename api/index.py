@@ -946,7 +946,7 @@ def webhook():
                 else:
                     send_telegram_message(chat_id, text="Cú pháp sai. Dùng: `/autonotify on` hoặc `/autonotify off`.", reply_to_message_id=msg_id)
         elif cmd == "/donate":
-            send_telegram_message(chat_id, text="*10u cho mỗi ví nào:*\n\ntieubochet.eth\nHipitutu.base.eth\nchimsetocxu.eth\nzeronftt.eth\ncuongeth.base.eth\nginmoney.base.eth\nhenryn6868.base.eth\nkorkwy.base.eth\nfunio.base.eth\n", reply_to_message_id=msg_id)
+            send_telegram_message(chat_id, text="*1000u cho mỗi ví nào:*\n\ntieubochet.eth\nHipitutu.base.eth\nchimsetocxu.eth\nzeronftt.eth\ncuongeth.base.eth\nginmoney.base.eth\nhenryn6868.base.eth\nkorkwy.base.eth\nfunio.base.eth\n", reply_to_message_id=msg_id)
         elif cmd in ['/add', '/edit', '/del']:
             success = False; message = ""
             if cmd == '/add':
