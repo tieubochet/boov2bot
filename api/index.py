@@ -919,7 +919,7 @@ def webhook():
                              "2️⃣ *Tính Portfolio (Event trade Alpha)*\n"
                              "Cú pháp: <số lượng> <contract> <chain>\n"
                              "Ví dụ: 20000 0x825459139c897d769339f295e962396c4f9e4a4d bsc"
-                             "2️⃣ *Tính Portfolio (Giá Binance Futures)*\n" # Thêm hướng dẫn
+                             "2️⃣ *Tính Portfolio (Giá Binance Futures)*\n" 
                              "Gõ `/folio` và xuống dòng nhập danh sách:\n"
                              "`<số lượng> <ký hiệu>`\n"
                              "_Ví dụ:_\n"
