@@ -1045,9 +1045,9 @@ def webhook():
             send_telegram_message(chat_id, text=list_price_alerts(chat_id), reply_to_message_id=msg_id)
         return jsonify(success=True)
     # Ưu tiên kiểm tra từ khóa "ví" trước tiên
-    if 'ví' in text.lower():
+    # if 'ví' in text.lower():
         # Nếu tìm thấy, gửi tin nhắn trả lời và không làm gì thêm
-        send_telegram_message(chat_id, text="tieubochet.eth, thanks", reply_to_message_id=msg_id)
+        # send_telegram_message(chat_id, text="tieubochet.eth, thanks", reply_to_message_id=msg_id)
     if len(parts) == 1 and is_crypto_address(parts[0]):
         send_telegram_message(chat_id, text=find_token_across_networks(parts[0]), reply_to_message_id=msg_id, disable_web_page_preview=True)
     else:
