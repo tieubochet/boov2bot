@@ -1098,7 +1098,7 @@ def check_events_and_notify_groups():
                         minutes_left = int(time_until_event.total_seconds() // 60) + 1
                         token, name = event.get('token', 'N/A'), event.get('name', 'N/A')
                         
-                        message = (f"‼️ *ANH NHẮC EM* @tieubochet‼️\n\n"
+                        message = (f"‼️ *ANH NHẮC EM*\n\n"
                                    f"Sự kiện: *{name} ({token})*\n"
                                    f"Thời gian: Trong vòng *{minutes_left} phút* nữa.")
                         
@@ -1156,7 +1156,7 @@ def cron_webhook():
                     if (datetime.now().timestamp() - last_reminded_ts) > 270:
                         minutes_left = int(time_until_due.total_seconds() / 60)
                         
-                        reminder_text = f"‼️ *ANH NHẮC EM* @tieubochet‼️\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
+                        reminder_text = f"‼️ *ANH NHẮC EM*\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
 
                         if task.get("type") == "alpha":
                             # <<< THAY ĐỔI: Gọi hàm lấy giá GeckoTerminal >>>
@@ -1165,7 +1165,7 @@ def cron_webhook():
                                 price = token_details['price']
                                 value = price * task['amount']
                                 reminder_text = (
-                                    f"‼️ *ANH NHẮC EM* @tieubochet ‼️\n\n"
+                                    f"‼️ *ANH NHẮC EM* ‼️\n\n"
                                     f"Sự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa.\n\n"
                                     f"Giá token: `${price:,.6f}`\n" # Thêm số thập phân
                                     f"Tổng ≈ `${value:,.2f}`"
