@@ -25,7 +25,7 @@ SYMBOL_TO_ID_MAP = {
     'talent':'talent-protocol', 'bas':'bas', 'ron':'ronin', 'dolo':'dolomite', 'wod':'world-of-dypians',
     'zent':'zentry','wod':'world-of-dypians', 'open':'openledger-2', 'mirror':'black-mirror',
     'wct':'connect-token-wct', 'stbl':'stbl', 'synd':'syndicate-3', 'mira':'mira-3', 'ff':'falcon-finance-ff',
-    'xan':'anoma', 'vang':'pax-gold', 'bless':'bless-2'
+    'xan':'anoma', 'vang':'pax-gold', 'bless':'bless-2', 'bank':'lorenzo-protocol'
 }
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
