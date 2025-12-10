@@ -459,20 +459,24 @@ def get_price_by_symbol(symbol: str) -> float | None:
 
 # <--- THAY ĐỔI: Dùng OpenAI API ---
 def get_crypto_explanation(query: str) -> str:
-    if not openai_client: return "❌ Lỗi cấu hình: Thiếu `OPENAI_API_KEY`."
+    if not openai_client:
+        return "❌ Lỗi cấu hình: Chưa cài đặt `OPENAI_API_KEY` trong Settings của Vercel."
+    
     try:
-        # Sử dụng model gpt-4o-mini cho tốc độ và giá rẻ, hoặc gpt-4o nếu cần thông minh hơn
+        # Dùng model gpt-4o-mini (rẻ và nhanh) hoặc gpt-3.5-turbo
         response = openai_client.chat.completions.create(
             model="gpt-4o-mini", 
             messages=[
                 {"role": "system", "content": "Bạn là một trợ lý chuyên gia về tiền điện tử. Hãy trả lời câu hỏi sau một cách ngắn gọn, súc tích, và dễ hiểu bằng tiếng Việt cho người mới bắt đầu. Tập trung vào các khía cạnh quan trọng nhất."},
                 {"role": "user", "content": query}
-            ]
+            ],
+            max_tokens=500  # Giới hạn độ dài để tiết kiệm token
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
         print(f"OpenAI API Error: {e}")
-        return f"❌ Đã xảy ra lỗi khi kết nối với dịch vụ giải thích."
+        # Trả về lỗi chi tiết để bạn biết nguyên nhân (ví dụ: hết tiền, sai key...)
+        return f"❌ Lỗi OpenAI: {str(e)}"
 # ----------------------------------->
 
 def calculate_value(parts: list) -> str:
@@ -487,20 +491,24 @@ def calculate_value(parts: list) -> str:
 
 # <--- THAY ĐỔI: Dùng OpenAI API ---
 def translate_crypto_text(text_to_translate: str) -> str:
-    if not openai_client: return "❌ Lỗi cấu hình: Thiếu `OPENAI_API_KEY`."
+    if not openai_client:
+        return "❌ Lỗi cấu hình: Chưa cài đặt `OPENAI_API_KEY` trong Settings của Vercel."
+    
     try:
         prompt = "Act as an expert translator specializing in finance and cryptocurrency. Your task is to translate the following English text into Vietnamese. Use accurate and natural-sounding financial/crypto jargon appropriate for a savvy investment community. Preserve the original nuance and meaning. Only provide the final Vietnamese translation, without any additional explanation."
+        
         response = openai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": text_to_translate}
-            ]
+            ],
+            max_tokens=1000
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
         print(f"OpenAI API Error (Translation): {e}")
-        return f"❌ Đã xảy ra lỗi khi kết nối với dịch vụ dịch thuật."
+        return f"❌ Lỗi OpenAI: {str(e)}"
 # ----------------------------------->
 
 def find_perpetual_markets(symbol: str) -> str:
