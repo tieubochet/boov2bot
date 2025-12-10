@@ -28,17 +28,24 @@ SYMBOL_TO_ID_MAP = {
     'xan':'anoma', 'vang':'pax-gold', 'bless':'bless-2', 'bank':'lorenzo-protocol'
 }
 
-# <--- THAY ĐỔI: Cấu hình OpenAI ---
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# --- CẤU HÌNH GROQ (Dùng thư viện OpenAI nhưng trỏ về server Groq) ---
+# Import: from openai import OpenAI (Giữ nguyên dòng này ở đầu file)
+
+# Đổi tên biến môi trường thành GROQ_API_KEY cho rõ ràng
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 openai_client = None
 
-if OPENAI_API_KEY:
+if GROQ_API_KEY:
     try:
-        openai_client = OpenAI(api_key=OPENAI_API_KEY)
+        # Cấu hình Client trỏ về Groq
+        openai_client = OpenAI(
+            base_url="https://api.groq.com/openai/v1",
+            api_key=GROQ_API_KEY
+        )
     except Exception as e:
-        print(f"Error configuring OpenAI: {e}")
+        print(f"Error configuring Groq: {e}")
 else:
-    print("Warning: OPENAI_API_KEY is not set.")
+    print("Warning: GROQ_API_KEY is not set.")
 # ----------------------------------->
 
 # --- KẾT NỐI CƠ SỞ DỮ LIỆU ---
@@ -457,27 +464,25 @@ def get_price_by_symbol(symbol: str) -> float | None:
         return res.json().get(coin_id, {}).get('usd') if res.status_code == 200 else None
     except requests.RequestException: return None
 
-# <--- THAY ĐỔI: Dùng OpenAI API ---
+# --- SỬA LẠI HÀM /GT (Dùng Model Llama 3 trên Groq) ---
 def get_crypto_explanation(query: str) -> str:
     if not openai_client:
-        return "❌ Lỗi cấu hình: Chưa cài đặt `OPENAI_API_KEY` trong Settings của Vercel."
+        return "❌ Lỗi cấu hình: Chưa cài đặt `GROQ_API_KEY` trong Settings của Vercel."
     
     try:
-        # Dùng model gpt-4o-mini (rẻ và nhanh) hoặc gpt-3.5-turbo
+        # Sử dụng model llama-3.3-70b-versatile (Mạnh nhất, hỗ trợ tiếng Việt tốt)
         response = openai_client.chat.completions.create(
-            model="gpt-4o-mini", 
+            model="llama-3.3-70b-versatile", 
             messages=[
                 {"role": "system", "content": "Bạn là một trợ lý chuyên gia về tiền điện tử. Hãy trả lời câu hỏi sau một cách ngắn gọn, súc tích, và dễ hiểu bằng tiếng Việt cho người mới bắt đầu. Tập trung vào các khía cạnh quan trọng nhất."},
                 {"role": "user", "content": query}
             ],
-            max_tokens=500  # Giới hạn độ dài để tiết kiệm token
+            max_tokens=1000
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        print(f"OpenAI API Error: {e}")
-        # Trả về lỗi chi tiết để bạn biết nguyên nhân (ví dụ: hết tiền, sai key...)
-        return f"❌ Lỗi OpenAI: {str(e)}"
-# ----------------------------------->
+        print(f"Groq API Error: {e}")
+        return f"❌ Lỗi Groq AI: {str(e)}"
 
 def calculate_value(parts: list) -> str:
     if len(parts) != 3: return "Cú pháp: `/calc <ký hiệu> <số lượng>`\nVí dụ: `/calc btc 0.5`"
@@ -489,16 +494,16 @@ def calculate_value(parts: list) -> str:
     total_value = price * amount
     return f"*{symbol.upper()}*: `${price:,.2f}` x {amount_str} = *${total_value:,.2f}*"
 
-# <--- THAY ĐỔI: Dùng OpenAI API ---
+# --- SỬA LẠI HÀM /TR (Dùng Model Llama 3 trên Groq) ---
 def translate_crypto_text(text_to_translate: str) -> str:
     if not openai_client:
-        return "❌ Lỗi cấu hình: Chưa cài đặt `OPENAI_API_KEY` trong Settings của Vercel."
+        return "❌ Lỗi cấu hình: Chưa cài đặt `GROQ_API_KEY` trong Settings của Vercel."
     
     try:
         prompt = "Act as an expert translator specializing in finance and cryptocurrency. Your task is to translate the following English text into Vietnamese. Use accurate and natural-sounding financial/crypto jargon appropriate for a savvy investment community. Preserve the original nuance and meaning. Only provide the final Vietnamese translation, without any additional explanation."
         
         response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": text_to_translate}
@@ -507,9 +512,8 @@ def translate_crypto_text(text_to_translate: str) -> str:
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        print(f"OpenAI API Error (Translation): {e}")
-        return f"❌ Lỗi OpenAI: {str(e)}"
-# ----------------------------------->
+        print(f"Groq API Error (Translation): {e}")
+        return f"❌ Lỗi Groq AI: {str(e)}"
 
 def find_perpetual_markets(symbol: str) -> str:
     """Tìm các sàn CEX và DEX có hợp đồng perpetual và hiển thị funding rate."""
