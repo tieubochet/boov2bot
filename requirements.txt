@@ -3,3 +3,4 @@ requests
 pytz
 redis
 google-generativeai
+openai
