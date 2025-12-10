@@ -7,7 +7,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 import pytz
 from redis import Redis
-import google.generativeai as genai
+from openai import OpenAI  # <--- THAY ĐỔI: Import OpenAI
 
 # --- CẤU HÌNH ---
 AUTO_SEARCH_NETWORKS = ['bsc', 'eth', 'tron', 'polygon', 'arbitrum', 'base']
@@ -27,14 +27,19 @@ SYMBOL_TO_ID_MAP = {
     'wct':'connect-token-wct', 'stbl':'stbl', 'synd':'syndicate-3', 'mira':'mira-3', 'ff':'falcon-finance-ff',
     'xan':'anoma', 'vang':'pax-gold', 'bless':'bless-2', 'bank':'lorenzo-protocol'
 }
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
-if GOOGLE_API_KEY:
+# <--- THAY ĐỔI: Cấu hình OpenAI ---
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+openai_client = None
+
+if OPENAI_API_KEY:
     try:
-        genai.configure(api_key=GOOGLE_API_KEY)
+        openai_client = OpenAI(api_key=OPENAI_API_KEY)
     except Exception as e:
-        print(f"Error configuring Google Gemini: {e}")
-        GOOGLE_API_KEY = None
+        print(f"Error configuring OpenAI: {e}")
+else:
+    print("Warning: OPENAI_API_KEY is not set.")
+# ----------------------------------->
 
 # --- KẾT NỐI CƠ SỞ DỮ LIỆU ---
 try:
@@ -43,6 +48,7 @@ try:
     kv = Redis.from_url(kv_url, decode_responses=True)
 except Exception as e:
     print(f"FATAL: Could not connect to Redis. Error: {e}"); kv = None
+
 # --- LOGIC QUẢN LÝ CÔNG VIỆC ---
 def _get_processed_airdrop_events():
     """
@@ -67,91 +73,6 @@ def _get_processed_airdrop_events():
         except Exception: pass
         return {}
 
-    def _filter_and_deduplicate_events(events):
-        processed = {}
-        for event in events:
-            key = (event.get('date'), event.get('token'))
-            if key not in processed or event.get('phase', 1) > processed[key].get('phase', 1):
-                processed[key] = event
-        return list(processed.values())
-
-    # --- SỬA LỖI XỬ LÝ THỜI GIAN KHÔNG HỢP LỆ TẠI ĐÂY ---
-    def _get_effective_event_time(event):
-        """
-        Trả về thời gian hiệu lực của sự kiện dưới dạng datetime object (đã ở múi giờ Việt Nam).
-        Xử lý an toàn các trường hợp time không hợp lệ như 'delay'.
-        """
-        event_date_str = event.get('date')
-        event_time_str = event.get('time')
-        
-        # Bước 1: Kiểm tra đầu vào cơ bản. Nếu không có date, time, hoặc không có dấu ':' thì bỏ qua.
-        if not (event_date_str and event_time_str and ':' in event_time_str):
-            return None
-            
-        try:
-            # Bước 2: Làm sạch chuỗi thời gian. Lấy phần đầu tiên trước khoảng trắng.
-            # Điều này sẽ chuyển "13:00 Delay" thành "13:00".
-            cleaned_time_str = event_time_str.strip().split()[0]
-            
-            # Bước 3: Phân tích thời gian đã được làm sạch
-            naive_dt = datetime.strptime(f"{event_date_str} {cleaned_time_str}", '%Y-%m-%d %H:%M')
-            
-            if event.get('phase') == 2:
-                naive_dt += timedelta(hours=18)
-            
-            china_dt = CHINA_TIMEZONE.localize(naive_dt)
-            vietnam_dt = china_dt.astimezone(TIMEZONE)
-            
-            return vietnam_dt
-        except Exception:
-            # Bước 4: Nếu có bất kỳ lỗi nào xảy ra (ValueError, pytz error...),
-            # trả về None để xử lý như một sự kiện không có thời gian cụ thể.
-            return None
-
-    try:
-        airdrop_res = requests.get(AIRDROP_API_URL, headers=HEADERS, timeout=20)
-        if airdrop_res.status_code != 200: return None, f"❌ Lỗi khi gọi API sự kiện (Code: {airdrop_res.status_code})."
-        
-        data = airdrop_res.json()
-        airdrops = data.get('airdrops', [])
-        if not airdrops: return [], None
-
-        price_data = _get_price_data()
-        definitive_events = _filter_and_deduplicate_events(airdrops)
-        
-        for event in definitive_events:
-            event['effective_dt'] = _get_effective_event_time(event)
-            event['price_data'] = price_data
-
-        return definitive_events, None
-    except requests.RequestException: return None, "❌ Lỗi mạng khi lấy dữ liệu sự kiện."
-    except json.JSONDecodeError: return None, "❌ Dữ liệu trả về từ API sự kiện không hợp lệ."
-
-def _get_processed_airdrop_events():
-    """
-    Hàm nội bộ: Lấy và xử lý dữ liệu airdrop, trả về danh sách các sự kiện
-    đã được lọc với thời gian hiệu lực đã được tính toán.
-    Đây là hàm logic cốt lõi.
-    """
-    AIRDROP_API_URL = "https://alpha123.uk/api/data?fresh=1"
-    PRICE_API_URL = "https://alpha123.uk/api/price/?batch=today"
-    HEADERS = {
-      'referer': 'https://alpha123.uk/index.html',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-
-    def _get_price_data():
-        try:
-            res = requests.get(PRICE_API_URL, headers=HEADERS, timeout=10)
-            if res.status_code == 200:
-                price_json = res.json()
-                if price_json.get('success') and 'prices' in price_json:
-                    return price_json['prices']
-        except Exception: pass
-        return {}
-
-    # SỬA LỖI: Hàm _filter_and_deduplicate_events đã bị XÓA BỎ.
-
     def _get_effective_event_time(event):
         """
         Trả về thời gian hiệu lực của sự kiện dưới dạng datetime object (đã ở múi giờ Việt Nam).
@@ -181,7 +102,6 @@ def _get_processed_airdrop_events():
 
         price_data = _get_price_data()
         
-        # SỬA LỖI: Không còn gom nhóm. Xử lý trực tiếp danh sách 'airdrops'
         for event in airdrops:
             event['effective_dt'] = _get_effective_event_time(event)
             event['price_data'] = price_data
@@ -255,11 +175,9 @@ def get_airdrop_events() -> tuple[str, str | None]:
     todays_events.sort(key=lambda x: x.get('effective_dt') or datetime.max.replace(tzinfo=TIMEZONE))
     upcoming_events.sort(key=lambda x: x.get('effective_dt') or datetime.max.replace(tzinfo=TIMEZONE))
     
-    # --- SỬA LỖI LOGIC: TÌM SỰ KIỆN GẦN NHẤT TỪ CẢ HAI DANH SÁCH ---
     next_event_token = None
-    all_future_events = todays_events + upcoming_events  # Gộp 2 danh sách đã sắp xếp
+    all_future_events = todays_events + upcoming_events
     if all_future_events:
-        # Sự kiện đầu tiên trong danh sách gộp chính là sự kiện gần nhất
         next_event_token = all_future_events[0].get('token')
 
     message_parts = []
@@ -301,14 +219,13 @@ def add_task(chat_id, task_string: str) -> tuple[bool, str]:
     if not task_dt or not name_part: return False, "❌ Cú pháp sai. Dùng: `DD/MM HH:mm - Tên công việc`."
     if task_dt < datetime.now(TIMEZONE): return False, "❌ Không thể đặt lịch cho quá khứ."
     tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
-    # Thêm type: 'simple' để phân biệt
     tasks.append({"type": "simple", "time_iso": task_dt.isoformat(), "name": name_part})
     tasks.sort(key=lambda x: x['time_iso'])
     kv.set(f"tasks:{chat_id}", json.dumps(tasks))
     return True, f"✅ Đã thêm lịch: *{name_part}*."
+
 def add_alpha_task(chat_id, task_string: str) -> tuple[bool, str]:
     if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
-    
     try:
         parts = task_string.split(' - ', 2)
         if len(parts) != 3: raise ValueError
@@ -326,7 +243,6 @@ def add_alpha_task(chat_id, task_string: str) -> tuple[bool, str]:
         if not is_crypto_address(contract):
             return False, f"❌ Địa chỉ contract không hợp lệ: `{contract}`"
             
-        # Kiểm tra sự tồn tại của token, không cần quan tâm giá ban đầu
         token_details = get_token_details_by_contract(contract)
         if not token_details:
             return False, f"❌ Không tìm thấy token với contract `{contract[:10]}...` trên các mạng được hỗ trợ."
@@ -347,9 +263,9 @@ def add_alpha_task(chat_id, task_string: str) -> tuple[bool, str]:
     tasks.sort(key=lambda x: x['time_iso'])
     kv.set(f"tasks:{chat_id}", json.dumps(tasks))
     return True, f"✅ Đã thêm lịch Alpha: *{event_name}*."
+
 def edit_task(chat_id, index_str: str, new_task_string: str) -> tuple[bool, str]:
     if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
-    
     try:
         task_index = int(index_str) - 1
         if task_index < 0: raise ValueError
@@ -363,14 +279,10 @@ def edit_task(chat_id, index_str: str, new_task_string: str) -> tuple[bool, str]
     if task_index >= len(active_tasks):
         return False, "❌ Số thứ tự không hợp lệ."
 
-    # Xác định công việc cần sửa và loại của nó
     task_to_edit_ref = active_tasks[task_index]
     task_type = task_to_edit_ref.get("type", "simple")
-
-    # Xóa công việc cũ khỏi danh sách đầy đủ
     user_tasks = [t for t in user_tasks if t['time_iso'] != task_to_edit_ref['time_iso']]
 
-    # Xử lý và tạo công việc mới dựa trên loại
     if task_type == "alpha":
         try:
             parts = new_task_string.split(' - ', 2)
@@ -392,7 +304,6 @@ def edit_task(chat_id, index_str: str, new_task_string: str) -> tuple[bool, str]
             if initial_price is None:
                 return False, f"❌ Không tìm thấy token với contract `{contract[:10]}...` trên mạng BSC."
 
-            # Thêm lại công việc alpha đã được cập nhật
             user_tasks.append({
                 "type": "alpha",
                 "time_iso": new_task_dt.isoformat(),
@@ -404,50 +315,40 @@ def edit_task(chat_id, index_str: str, new_task_string: str) -> tuple[bool, str]
         except (ValueError, IndexError):
             return False, "❌ Cú pháp sai. Dùng: `DD/MM HH:mm - Tên sự kiện - 'số lượng' 'contract'`."
     
-    else: # Xử lý cho công việc 'simple' (mặc định)
+    else: 
         new_task_dt, new_name_part = parse_task_from_string(new_task_string)
         if not new_task_dt or not new_name_part:
             return False, "❌ Cú pháp sai. Dùng: `DD/MM HH:mm - Tên công việc`."
         
-        # Thêm lại công việc simple đã được cập nhật
         user_tasks.append({
             "type": "simple",
             "time_iso": new_task_dt.isoformat(),
             "name": new_name_part
         })
 
-    # Sắp xếp lại danh sách và lưu vào Redis
     user_tasks.sort(key=lambda x: x['time_iso'])
     kv.set(f"tasks:{chat_id}", json.dumps(user_tasks))
-    
     return True, f"✅ Đã sửa công việc số *{task_index + 1}*."
+
 def delete_task(chat_id, task_index_str: str) -> tuple[bool, str]:
-    """Xóa một công việc theo số thứ tự hiển thị trong /list."""
     if not kv: return False, "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
-    
     try:
-        task_index = int(task_index_str) - 1 # Chuyển từ 1-based sang 0-based
+        task_index = int(task_index_str) - 1
         if task_index < 0: raise ValueError
     except (ValueError, AssertionError):
         return False, "❌ Số thứ tự không hợp lệ."
 
     user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
-    # Lấy danh sách các công việc đang hoạt động (những gì người dùng thấy)
     active_tasks = [t for t in user_tasks if datetime.fromisoformat(t['time_iso']) > datetime.now(TIMEZONE)]
 
-    # Kiểm tra xem chỉ mục có hợp lệ với danh sách đang hoạt động không
     if task_index >= len(active_tasks):
         return False, "❌ Số thứ tự không hợp lệ."
 
-    # Xác định công việc cần xóa dựa trên danh sách đang hoạt động
     task_to_delete = active_tasks[task_index]
-    
-    # Tạo danh sách mới bằng cách loại bỏ công việc đã xác định
     updated_tasks = [t for t in user_tasks if t['time_iso'] != task_to_delete['time_iso']]
-    
     kv.set(f"tasks:{chat_id}", json.dumps(updated_tasks))
-    
     return True, f"✅ Đã xóa lịch hẹn: *{task_to_delete['name']}*"
+
 def list_tasks(chat_id) -> str:
     if not kv: return "Lỗi: Chức năng lịch hẹn không khả dụng do không kết nối được DB."
     user_tasks = json.loads(kv.get(f"tasks:{chat_id}") or '[]')
@@ -461,28 +362,18 @@ def list_tasks(chat_id) -> str:
 
 # --- LOGIC CRYPTO & TIỆN ÍCH BOT ---
 def get_coingecko_prices_by_symbols(symbols: list[str]) -> dict | None:
-    """Lấy giá của một danh sách các token từ CoinGecko bằng ký hiệu."""
-    if not symbols:
-        return {}
-        
-    # Chuyển đổi ký hiệu (btc, eth) sang id (bitcoin, ethereum) mà CoinGecko hiểu
+    if not symbols: return {}
     ids_to_fetch = [SYMBOL_TO_ID_MAP.get(s.lower(), s.lower()) for s in symbols]
     ids_string = ",".join(ids_to_fetch)
-    
     url = f"https://api.coingecko.com/api/v3/simple/price"
     params = {'ids': ids_string, 'vs_currencies': 'usd'}
-    
     try:
         res = requests.get(url, params=params, timeout=15)
         if res.status_code == 200:
             data = res.json()
-            # Xây dựng lại bản đồ từ symbol sang giá để dễ tra cứu
             price_map = {}
-            # Tạo một map ngược từ id về symbol để trả về đúng định dạng
             id_to_symbol_map = {v: k for k, v in SYMBOL_TO_ID_MAP.items()}
-            
             for coin_id, price_data in data.items():
-                # Ưu tiên tìm lại symbol gốc, nếu không có thì dùng chính id
                 symbol = id_to_symbol_map.get(coin_id, coin_id)
                 price_map[symbol.lower()] = price_data.get('usd', 0)
             return price_map
@@ -493,11 +384,8 @@ def get_coingecko_prices_by_symbols(symbols: list[str]) -> dict | None:
         print(f"Error fetching CoinGecko prices: {e}")
         return None
 
-### <<< THAY THẾ HÀM process_folio_text CŨ BẰNG HÀM MỚI NÀY ###
 def process_folio_text(message_text: str) -> str:
-    """Xử lý và tính toán giá trị portfolio từ CoinGecko."""
     lines = message_text.strip().split('\n')
-    
     if lines and lines[0].lower().startswith('/folio'):
         if len(lines[0].split()) == 1: lines = lines[1:]
         else: lines[0] = lines[0].split(maxsplit=1)[1]
@@ -505,7 +393,6 @@ def process_folio_text(message_text: str) -> str:
     if not lines or all(not line.strip() for line in lines):
         return "Cú pháp: `/folio` sau đó xuống dòng nhập danh sách.\nVí dụ:\n`/folio\n0.5 btc\n10 eth`"
 
-    # Bước 1: Thu thập tất cả các token và số lượng từ input
     portfolio_items = []
     symbols_to_fetch = set()
     for i, line in enumerate(lines):
@@ -513,7 +400,6 @@ def process_folio_text(message_text: str) -> str:
         if not line: continue
         parts = line.split()
         if len(parts) != 2: continue
-        
         amount_str, symbol = parts
         try:
             amount = float(amount_str)
@@ -522,12 +408,10 @@ def process_folio_text(message_text: str) -> str:
         except ValueError:
             portfolio_items.append({'error': f"Số lượng không hợp lệ: `{amount_str}`", 'line_num': i + 1})
 
-    # Bước 2: Gọi API một lần duy nhất để lấy tất cả giá
     prices = get_coingecko_prices_by_symbols(list(symbols_to_fetch))
     if prices is None:
         return "❌ Không thể lấy dữ liệu giá từ CoinGecko. Vui lòng thử lại sau."
         
-    # Bước 3: Tính toán và định dạng kết quả
     total_value = 0.0
     result_lines = []
     
@@ -552,7 +436,6 @@ def process_folio_text(message_text: str) -> str:
     return final_result_text + summary
 
 def get_bsc_price_by_contract(address: str) -> float | None:
-    """Hàm chuyên biệt chỉ lấy giá của token trên mạng BSC."""
     network = 'bsc'
     url = f"https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{address}"
     try:
@@ -565,6 +448,7 @@ def get_bsc_price_by_contract(address: str) -> float | None:
     except requests.RequestException as e:
         print(f"Error getting BSC price for {address}: {e}")
     return None
+
 def get_price_by_symbol(symbol: str) -> float | None:
     coin_id = SYMBOL_TO_ID_MAP.get(symbol.lower(), symbol.lower())
     url = "https://api.coingecko.com/api/v3/simple/price"; params = {'ids': coin_id, 'vs_currencies': 'usd'}
@@ -572,17 +456,25 @@ def get_price_by_symbol(symbol: str) -> float | None:
         res = requests.get(url, params=params, timeout=10)
         return res.json().get(coin_id, {}).get('usd') if res.status_code == 200 else None
     except requests.RequestException: return None
+
+# <--- THAY ĐỔI: Dùng OpenAI API ---
 def get_crypto_explanation(query: str) -> str:
-    if not GOOGLE_API_KEY: return "❌ Lỗi cấu hình: Thiếu `GOOGLE_API_KEY`."
+    if not openai_client: return "❌ Lỗi cấu hình: Thiếu `OPENAI_API_KEY`."
     try:
-        model = genai.GenerativeModel('gemini-2.5-pro')
-        full_prompt = (f"Bạn là một trợ lý chuyên gia về tiền điện tử. Hãy trả lời câu hỏi sau một cách ngắn gọn, súc tích, và dễ hiểu bằng tiếng Việt cho người mới bắt đầu. Tập trung vào các khía cạnh quan trọng nhất. Trả lời luôn mà không cần nói gì thêm.\n\nCâu hỏi: {query}")
-        response = model.generate_content(full_prompt)
-        if response.parts: return response.text
-        else: return "❌ Không thể tạo câu trả lời cho câu hỏi này."
+        # Sử dụng model gpt-4o-mini cho tốc độ và giá rẻ, hoặc gpt-4o nếu cần thông minh hơn
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini", 
+            messages=[
+                {"role": "system", "content": "Bạn là một trợ lý chuyên gia về tiền điện tử. Hãy trả lời câu hỏi sau một cách ngắn gọn, súc tích, và dễ hiểu bằng tiếng Việt cho người mới bắt đầu. Tập trung vào các khía cạnh quan trọng nhất."},
+                {"role": "user", "content": query}
+            ]
+        )
+        return response.choices[0].message.content.strip()
     except Exception as e:
-        print(f"Google Gemini API Error: {e}")
+        print(f"OpenAI API Error: {e}")
         return f"❌ Đã xảy ra lỗi khi kết nối với dịch vụ giải thích."
+# ----------------------------------->
+
 def calculate_value(parts: list) -> str:
     if len(parts) != 3: return "Cú pháp: `/calc <ký hiệu> <số lượng>`\nVí dụ: `/calc btc 0.5`"
     symbol, amount_str = parts[1], parts[2]
@@ -592,17 +484,25 @@ def calculate_value(parts: list) -> str:
     if price is None: return f"❌ Không tìm thấy giá cho ký hiệu `{symbol}`."
     total_value = price * amount
     return f"*{symbol.upper()}*: `${price:,.2f}` x {amount_str} = *${total_value:,.2f}*"
+
+# <--- THAY ĐỔI: Dùng OpenAI API ---
 def translate_crypto_text(text_to_translate: str) -> str:
-    if not GOOGLE_API_KEY: return "❌ Lỗi cấu hình: Thiếu `GOOGLE_API_KEY`."
+    if not openai_client: return "❌ Lỗi cấu hình: Thiếu `OPENAI_API_KEY`."
     try:
-        model = genai.GenerativeModel('gemini-2.5-pro')
-        prompt = (f"Act as an expert translator specializing in finance and cryptocurrency. Your task is to translate the following English text into Vietnamese. Use accurate and natural-sounding financial/crypto jargon appropriate for a savvy investment community. Preserve the original nuance and meaning. Only provide the final Vietnamese translation, without any additional explanation or preamble.\n\nText to translate:\n\"\"\"{text_to_translate}\"\"\"")
-        response = model.generate_content(prompt)
-        if response.parts: return response.text
-        else: return "❌ Không thể dịch văn bản này."
+        prompt = "Act as an expert translator specializing in finance and cryptocurrency. Your task is to translate the following English text into Vietnamese. Use accurate and natural-sounding financial/crypto jargon appropriate for a savvy investment community. Preserve the original nuance and meaning. Only provide the final Vietnamese translation, without any additional explanation."
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": text_to_translate}
+            ]
+        )
+        return response.choices[0].message.content.strip()
     except Exception as e:
-        print(f"Google Gemini API Error (Translation): {e}")
+        print(f"OpenAI API Error (Translation): {e}")
         return f"❌ Đã xảy ra lỗi khi kết nối với dịch vụ dịch thuật."
+# ----------------------------------->
+
 def find_perpetual_markets(symbol: str) -> str:
     """Tìm các sàn CEX và DEX có hợp đồng perpetual và hiển thị funding rate."""
     url = "https://api.coingecko.com/api/v3/derivatives"
@@ -627,9 +527,6 @@ def find_perpetual_markets(symbol: str) -> str:
             if contract_symbol.startswith(search_symbol):
                 found = True
                 market_name = contract.get('market')
-                
-                # Sửa lỗi: Lấy trực tiếp funding rate và không nhân thêm
-                # API của Coingecko đã trả về funding rate dưới dạng phần trăm
                 funding_rate = contract.get('funding_rate')
                 
                 if market_name and funding_rate is not None:
@@ -641,16 +538,13 @@ def find_perpetual_markets(symbol: str) -> str:
         if not found or not markets:
             return f"ℹ️ Không tìm thấy thị trường Perpetual nào có dữ liệu funding rate cho *{symbol.upper()}*."
 
-        # Sắp xếp các sàn theo funding rate từ cao đến thấp
         markets.sort(key=lambda x: x['funding_rate'], reverse=True)
         
-        # Định dạng kết quả
         message_parts = [f"📊 *Funding Rate cho {symbol.upper()} (Perpetual):*"]
         
         for market in markets[:15]:
             rate = market['funding_rate']
             emoji = "🟢" if rate > 0 else "🔴" if rate < 0 else "⚪️"
-            # Định dạng funding rate với 4 chữ số thập phân
             message_parts.append(f"{emoji} `{market['name']}`: `{rate:+.4f}%`")
             
         return "\n".join(message_parts)
@@ -660,7 +554,6 @@ def find_perpetual_markets(symbol: str) -> str:
         return "❌ Lỗi mạng khi lấy dữ liệu thị trường phái sinh."
 
 def unalert_price(chat_id, address: str) -> str:
-    """Xóa một cảnh báo giá đã đặt."""
     if not kv: return "Lỗi: Chức năng cảnh báo giá không khả dụng do không kết nối được DB."
     alert_key = f"{chat_id}:{address.lower()}"
     if kv.hexists("price_alerts", alert_key):
@@ -668,11 +561,9 @@ def unalert_price(chat_id, address: str) -> str:
         return f"✅ Đã xóa cảnh báo giá cho token `{address[:6]}...{address[-4:]}`."
     else:
         return f"❌ Không tìm thấy cảnh báo nào cho token `{address[:6]}...{address[-4:]}`."
-# --- THAY THẾ HÀM set_price_alert CŨ BẰNG HÀM NÀY ---
+
 def set_price_alert(chat_id, address: str, percentage_str: str) -> str:
-    """Thiết lập cảnh báo giá cho một token."""
     if not kv: return "Lỗi: Chức năng cảnh báo giá không khả dụng do không kết nối được DB."
-    
     try:
         percentage = float(percentage_str)
         if percentage <= 0:
@@ -680,8 +571,6 @@ def set_price_alert(chat_id, address: str, percentage_str: str) -> str:
     except ValueError:
         return "❌ Phần trăm không hợp lệ. Vui lòng nhập một con số (ví dụ: `5`)."
 
-    # --- SỬA LỖI TẠI ĐÂY ---
-    # Thay thế get_price_by_contract bằng get_token_details_by_contract
     token_info = get_token_details_by_contract(address)
     
     if not token_info:
@@ -703,10 +592,9 @@ def set_price_alert(chat_id, address: str, percentage_str: str) -> str:
     
     return (f"✅ Đã đặt cảnh báo cho *{token_info['name']} (${token_info['symbol']})*.\n"
             f"Bot sẽ thông báo mỗi khi giá thay đổi `±{percentage}%` so với giá tham chiếu hiện tại là `${current_price:,.4f}`.")
-def list_price_alerts(chat_id) -> str:
-    """Liệt kê tất cả các cảnh báo giá đang hoạt động cho một chat."""
-    if not kv: return "Lỗi: Chức năng cảnh báo giá không khả dụng do không kết nối được DB."
 
+def list_price_alerts(chat_id) -> str:
+    if not kv: return "Lỗi: Chức năng cảnh báo giá không khả dụng do không kết nối được DB."
     all_alerts_raw = kv.hgetall("price_alerts")
     user_alerts = []
     
@@ -731,14 +619,9 @@ def list_price_alerts(chat_id) -> str:
         message_parts.append(
             f"\n- *{name} (${symbol})* | Ngưỡng: `±{threshold}%` | Giá tham chiếu: `${ref_price:,.4f}`"
         )
-        
     return "\n".join(message_parts)
+
 def get_token_details_by_contract(address: str) -> dict | None:
-    """
-    Hàm phụ trợ để lấy thông tin chi tiết của token (giá, mạng, symbol, name)
-    từ địa chỉ contract bằng cách quét các mạng trên GeckoTerminal.
-    Sẽ trả về thông tin ngay cả khi giá là 0.
-    """
     for network in AUTO_SEARCH_NETWORKS:
         url = f"https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{address}"
         try:
@@ -746,12 +629,9 @@ def get_token_details_by_contract(address: str) -> dict | None:
             if res.status_code == 200:
                 data = res.json().get('data', {}).get('attributes', {})
                 name = data.get('name')
-                
-                # Chỉ cần có tên là coi như tìm thấy token
                 if name:
                     price_str = data.get('price_usd')
                     price = float(price_str) if price_str is not None else 0.0
-                    
                     return {
                         "price": price,
                         "network": network,
@@ -761,7 +641,7 @@ def get_token_details_by_contract(address: str) -> dict | None:
         except requests.RequestException:
             continue
     return None
-# --- THAY THẾ HÀM check_price_alerts CŨ BẰNG HÀM NÀY ---
+
 def check_price_alerts():
     if not kv: print("Price Alert check skipped due to no DB connection."); return
     all_alerts_raw = kv.hgetall("price_alerts")
@@ -771,8 +651,6 @@ def check_price_alerts():
             address = alert['address']; network = alert['network']; chat_id = alert['chat_id']
             threshold = alert['threshold_percent']; ref_price = alert['reference_price']
             
-            # --- SỬA LỖI TẠI ĐÂY ---
-            # Thay thế get_price_by_contract bằng get_token_details_by_contract
             token_info = get_token_details_by_contract(address)
             
             if not token_info: continue
@@ -800,9 +678,11 @@ def check_price_alerts():
         except (json.JSONDecodeError, KeyError) as e:
             print(f"Error processing price alert for key {key}: {e}")
             continue
+
 def is_evm_address(s: str) -> bool: return isinstance(s, str) and s.startswith('0x') and len(s) == 42
 def is_tron_address(s: str) -> bool: return isinstance(s, str) and s.startswith('T') and len(s) == 34
 def is_crypto_address(s: str) -> bool: return is_evm_address(s) or is_tron_address(s)
+
 def send_telegram_message(chat_id, text, **kwargs) -> int | None:
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {'chat_id': chat_id, 'text': text, 'parse_mode': 'Markdown', **kwargs}
@@ -811,6 +691,7 @@ def send_telegram_message(chat_id, text, **kwargs) -> int | None:
         if response.status_code == 200 and response.json().get('ok'): return response.json().get('result', {}).get('message_id')
         print(f"Error sending message, response: {response.text}"); return None
     except requests.RequestException as e: print(f"Error sending message: {e}"); return None
+
 def pin_telegram_message(chat_id, message_id):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/pinChatMessage"
     payload = {'chat_id': chat_id, 'message_id': message_id, 'disable_notification': False}
@@ -818,20 +699,24 @@ def pin_telegram_message(chat_id, message_id):
         response = requests.post(url, json=payload, timeout=10)
         if response.status_code != 200: print(f"Error pinning message: {response.text}")
     except requests.RequestException as e: print(f"Error pinning message: {e}")
+
 def edit_telegram_message(chat_id, msg_id, text, **kwargs):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText"
     payload = {'chat_id': chat_id, 'message_id': msg_id, 'text': text, 'parse_mode': 'Markdown', **kwargs}
     try: requests.post(url, json=payload, timeout=10)
     except requests.RequestException as e: print(f"Error editing message: {e}")
+
 def answer_callback_query(cb_id):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
     try: requests.post(url, json={'callback_query_id': cb_id}, timeout=5)
     except requests.RequestException as e: print(f"Error answering callback: {e}")
+
 def delete_telegram_message(chat_id, message_id):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
     payload = {'chat_id': chat_id, 'message_id': message_id}
     try: requests.post(url, json=payload, timeout=5)
     except requests.RequestException as e: print(f"Error deleting message: {e}")
+
 def find_token_across_networks(address: str) -> str:
     for network in AUTO_SEARCH_NETWORKS:
         url = f"https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{address}?include=top_pools"
@@ -841,15 +726,10 @@ def find_token_across_networks(address: str) -> str:
                 data = res.json()
                 token_attr = data.get('data', {}).get('attributes', {})
                 if not token_attr: continue
-
-                # --- SỬA LỖI ---
-                # Xử lý an toàn các giá trị có thể là None
                 price_str = token_attr.get('price_usd')
                 price = float(price_str) if price_str is not None else 0.0
-                
                 change_pct_str = token_attr.get('price_change_percentage', {}).get('h24')
                 change = float(change_pct_str) if change_pct_str is not None else 0.0
-
                 return (f"✅ *Tìm thấy trên mạng {network.upper()}*\n"
                         f"*{token_attr.get('name', 'N/A')} ({token_attr.get('symbol', 'N/A')})*\n\n"
                         f"Giá: *${price:,.8f}*\n24h: *{'📈' if change >= 0 else '📉'} {change:+.2f}%*\n\n"
@@ -857,6 +737,7 @@ def find_token_across_networks(address: str) -> str:
         except requests.RequestException:
             continue
     return f"❌ Không tìm thấy token với địa chỉ `{address[:10]}...`."
+
 def process_portfolio_text(message_text: str) -> str | None:
     lines = message_text.strip().split('\n'); total_value, result_lines, valid_lines_count = 0.0, [], 0
     for line in lines:
@@ -888,7 +769,6 @@ def webhook():
     data = request.get_json()
     if "callback_query" in data:
         cb = data["callback_query"]; answer_callback_query(cb["id"])
-        
         if cb.get("data") == "refresh_portfolio" and "reply_to_message" in cb["message"]:
             result = process_portfolio_text(cb["message"]["reply_to_message"]["text"])
             if result: edit_telegram_message(cb["message"]["chat"]["id"], cb["message"]["message_id"], text=result, reply_markup=cb["message"]["reply_markup"])
@@ -925,7 +805,6 @@ def webhook():
                              "_Ví dụ:_\n"
                              "```\n/folio\n0.5 btc\n10 eth\n```")
             send_telegram_message(chat_id, text=start_message)
-                # Sửa dòng này để bao gồm /del
         elif cmd == "/autonotify":
             if len(parts) < 2:
                 send_telegram_message(chat_id, text="Cú pháp sai. Dùng: `/autonotify on` hoặc `/autonotify off`.", reply_to_message_id=msg_id)
@@ -951,14 +830,11 @@ def webhook():
             success = False; message = ""
             if cmd == '/add':
                 success, message = add_task(chat_id, " ".join(parts[1:]))
-            
-            # Thêm lại khối elif này
             elif cmd == '/del':
                 if len(parts) > 1:
                     success, message = delete_task(chat_id, parts[1])
                 else:
                     message = "Cú pháp: `/del <số>`"
-
             elif cmd == '/edit':
                 if len(parts) < 3:
                     message = "Cú pháp: `/edit <số> DD/MM HH:mm - Tên mới`"
@@ -996,26 +872,19 @@ def webhook():
         elif cmd == '/event':
             temp_msg_id = send_telegram_message(chat_id, text="🔍 Teeboo đang tìm, đợi tí fen 😏", reply_to_message_id=msg_id)
             if temp_msg_id:
-                # 1. Lấy dữ liệu và token của sự kiện sắp tới
                 result, next_token = get_airdrop_events()
-                
-                # 2. Tạo nhãn nút bấm động
                 button_label = "🚀 Trade on Hyperliquid"
                 if next_token:
                     button_label = f"🚀 Trade {next_token.upper()} on Hyperliquid"
-                
-                # 3. Tạo bàn phím chỉ với một nút duy nhất
                 reply_markup = {
                     'inline_keyboard': [
-                        [ # Một hàng chứa một nút
+                        [
                             {'text': button_label, 'url': 'https://app.hyperliquid.xyz/join/TIEUBOCHET'}
                         ]
                     ]
                 }
-                
                 edit_telegram_message(chat_id, temp_msg_id, text=result, reply_markup=json.dumps(reply_markup))
         elif cmd == '/folio':
-            # Hàm process_folio_text giờ sẽ xử lý toàn bộ tin nhắn
             result = process_folio_text(text)
             send_telegram_message(chat_id, text=result, reply_to_message_id=msg_id)
         elif cmd == '/alpha':
@@ -1044,10 +913,7 @@ def webhook():
         elif cmd == '/alerts':
             send_telegram_message(chat_id, text=list_price_alerts(chat_id), reply_to_message_id=msg_id)
         return jsonify(success=True)
-    # Ưu tiên kiểm tra từ khóa "ví" trước tiên
-    # if 'ví' in text.lower():
-        # Nếu tìm thấy, gửi tin nhắn trả lời và không làm gì thêm
-        # send_telegram_message(chat_id, text="tieubochet.eth, thanks", reply_to_message_id=msg_id)
+    
     if len(parts) == 1 and is_crypto_address(parts[0]):
         send_telegram_message(chat_id, text=find_token_across_networks(parts[0]), reply_to_message_id=msg_id, disable_web_page_preview=True)
     else:
@@ -1055,14 +921,9 @@ def webhook():
         if portfolio_result:
             refresh_btn = {'inline_keyboard': [[{'text': '🔄 Refresh', 'callback_data': 'refresh_portfolio'}]]}
             send_telegram_message(chat_id, text=portfolio_result, reply_to_message_id=msg_id, reply_markup=json.dumps(refresh_btn))
-        #else:
-            #send_telegram_message(chat_id, text="🤔 Cú pháp không hợp lệ. Gửi /start để xem hướng dẫn.", reply_to_message_id=msg_id)
     return jsonify(success=True)
+
 def check_events_and_notify_groups():
-    """
-    Kiểm tra các sự kiện airdrop và gửi thông báo + ghim tin nhắn
-    cho tất cả các nhóm đã đăng ký.
-    """
     if not kv:
         print("Event check skipped: No DB connection.")
         return 0
@@ -1105,10 +966,8 @@ def check_events_and_notify_groups():
                         sent_message_id = send_telegram_message(chat_id, text=message)
                         
                         if sent_message_id:
-                            # Chỉ ghim tin nhắn nếu gửi thành công
                             pin_telegram_message(chat_id, sent_message_id)
                             notifications_sent += 1
-                            # Đánh dấu đã thông báo, key tự xóa sau 1 giờ để dọn dẹp
                             kv.set(redis_key, "1", ex=3600)
 
     print(f"Group event notification check finished. Sent: {notifications_sent} notifications.")
@@ -1116,7 +975,6 @@ def check_events_and_notify_groups():
 
 @app.route('/check_events', methods=['POST'])
 def event_cron_webhook():
-    """Endpoint để cron job gọi đến để kiểm tra sự kiện airdrop."""
     if not kv or not BOT_TOKEN or not CRON_SECRET:
         return jsonify(error="Server not configured"), 500
     
@@ -1126,6 +984,7 @@ def event_cron_webhook():
 
     sent_count = check_events_and_notify_groups()
     return jsonify(success=True, notifications_sent=sent_count)
+
 @app.route('/check_reminders', methods=['POST'])
 def cron_webhook():
     if not kv or not BOT_TOKEN or not CRON_SECRET: return jsonify(error="Server not configured"), 500
@@ -1159,7 +1018,6 @@ def cron_webhook():
                         reminder_text = f"‼️ *ANH NHẮC EM*\n\nSự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa."
 
                         if task.get("type") == "alpha":
-                            # <<< THAY ĐỔI: Gọi hàm lấy giá GeckoTerminal >>>
                             token_details = get_token_details_by_contract(task['contract'])
                             if token_details:
                                 price = token_details['price']
@@ -1167,7 +1025,7 @@ def cron_webhook():
                                 reminder_text = (
                                     f"‼️ *ANH NHẮC EM* ‼️\n\n"
                                     f"Sự kiện: *{task['name']}*\nSẽ diễn ra trong khoảng *{minutes_left} phút* nữa.\n\n"
-                                    f"Giá token: `${price:,.6f}`\n" # Thêm số thập phân
+                                    f"Giá token: `${price:,.6f}`\n"
                                     f"Tổng ≈ `${value:,.2f}`"
                                 )
                         
@@ -1186,6 +1044,7 @@ def cron_webhook():
     result = {"status": "success", "reminders_sent": reminders_sent}
     print(result)
     return jsonify(result)
+
 @app.route('/check_alerts', methods=['POST'])
 def alert_cron_webhook():
     if not kv or not BOT_TOKEN or not CRON_SECRET: return jsonify(error="Server not configured"), 500
