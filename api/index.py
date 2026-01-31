@@ -807,12 +807,7 @@ def webhook():
                              "1️⃣ *Tra cứu Token theo Contract*\n"
                              "2️⃣ *Tính Portfolio (Event trade Alpha)*\n"
                              "Cú pháp: <số lượng> <contract> <chain>\n"
-                             "Ví dụ: 20000 0x825459139c897d769339f295e962396c4f9e4a4d bsc"
-                             "2️⃣ *Tính Portfolio (Giá Binance Futures)*\n" 
-                             "Gõ `/folio` và xuống dòng nhập danh sách:\n"
-                             "`<số lượng> <ký hiệu>`\n"
-                             "_Ví dụ:_\n"
-                             "```\n/folio\n0.5 btc\n10 eth\n```")
+                             "Ví dụ: 20000 0x825459139c897d769339f295e962396c4f9e4a4d bsc")
             send_telegram_message(chat_id, text=start_message)
         elif cmd == "/autonotify":
             if len(parts) < 2:
