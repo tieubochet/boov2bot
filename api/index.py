@@ -751,26 +751,90 @@ def find_token_across_networks(address: str) -> str:
     return f"❌ Không tìm thấy token với địa chỉ `{address[:10]}...`."
 
 def process_portfolio_text(message_text: str) -> str | None:
-    lines = message_text.strip().split('\n'); total_value, result_lines, valid_lines_count = 0.0, [], 0
+    lines = message_text.strip().split('\n')
+    
+    # 1. Gom nhóm token theo network để gọi API 1 lần (Batching)
+    # Cấu trúc: {'bsc': [{'addr': '0x...', 'amount': 100}, ...], 'base': [...]}
+    network_groups = {}
+    valid_lines_count = 0
+    
     for line in lines:
         parts = line.strip().split()
         if len(parts) != 3: continue
-        try: amount = float(parts[0])
-        except ValueError: continue
-        address, network = parts[1], parts[2]
+        
+        try: 
+            amount = float(parts[0])
+        except ValueError: 
+            continue
+            
+        address, network = parts[1], parts[2].lower()
+        
         if not is_crypto_address(address):
-            result_lines.append(f"❌ Địa chỉ `{address[:10]}...` không hợp lệ."); continue
+            continue
+
         valid_lines_count += 1
-        url = f"https://api.geckoterminal.com/api/v2/networks/{network.lower()}/tokens/{address}"
-        try:
-            res = requests.get(url, headers={"accept": "application/json"}, timeout=10)
-            if res.status_code == 200:
-                attr = res.json().get('data', {}).get('attributes', {}); price = float(attr.get('price_usd', 0)); symbol = attr.get('symbol', 'N/A')
-                value = amount * price; total_value += value
-                result_lines.append(f"*{symbol}*: ${price:,.4f} x {amount} = *${value:,.2f}*")
-            else: result_lines.append(f"❌ Không tìm thấy giá cho `{address[:10]}...` trên `{network}`")
-        except requests.RequestException: result_lines.append(f"🔌 Lỗi mạng khi lấy giá cho `{address[:10]}...`")
+        
+        if network not in network_groups:
+            network_groups[network] = []
+        network_groups[network].append({'amount': amount, 'address': address})
+
     if valid_lines_count == 0: return None
+
+    total_value = 0.0
+    result_lines = []
+
+    # 2. Xử lý từng network (Giảm số lượng request từ N xuống 1)
+    for network, items in network_groups.items():
+        # Lấy danh sách address và nối chuỗi bằng dấu phẩy
+        addresses = [item['address'] for item in items]
+        addresses_str = ",".join(addresses)
+        
+        # Dùng endpoint multi-token của GeckoTerminal
+        url = f"https://api.geckoterminal.com/api/v2/networks/{network}/tokens/multi/{addresses_str}"
+        
+        try:
+            res = requests.get(url, headers={"accept": "application/json"}, timeout=15)
+            
+            if res.status_code == 200:
+                data = res.json().get('data', [])
+                
+                # Tạo map để tra cứu giá nhanh: {address_lower: price_data}
+                price_map = {}
+                for token_data in data:
+                    attrs = token_data.get('attributes', {})
+                    addr = attrs.get('address', '').lower()
+                    price_map[addr] = {
+                        'price': float(attrs.get('price_usd') or 0),
+                        'symbol': attrs.get('symbol', 'N/A')
+                    }
+                
+                # Tính toán dựa trên danh sách input ban đầu
+                for item in items:
+                    addr_key = item['address'].lower()
+                    amount = item['amount']
+                    
+                    if addr_key in price_map:
+                        info = price_map[addr_key]
+                        price = info['price']
+                        symbol = info['symbol']
+                        
+                        if price > 0:
+                            value = amount * price
+                            total_value += value
+                            result_lines.append(f"*{symbol}*: `${price:,.4f}` x {amount} = *${value:,.2f}*")
+                        else:
+                            result_lines.append(f"⚠️ *{symbol}*: Chưa có giá (Liquidity thấp)")
+                    else:
+                        # Trường hợp API trả về OK nhưng không tìm thấy token trong list đó
+                        result_lines.append(f"❌ Không tìm thấy data: `{item['address'][:6]}...`")
+            
+            else:
+                # Lỗi cả network (ví dụ nhập sai tên network)
+                result_lines.append(f"❌ Lỗi mạng {network}: API trả về {res.status_code}")
+
+        except requests.RequestException:
+            result_lines.append(f"🔌 Lỗi kết nối khi check mạng {network}")
+
     return "\n".join(result_lines) + f"\n--------------------\n*Húp nhẹ: *${total_value:,.2f}**"
 
 # --- WEB SERVER (FLASK) ---
