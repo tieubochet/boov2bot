@@ -839,8 +839,17 @@ def process_portfolio_text(message_text: str) -> str | None:
 
 # --- WEB SERVER (FLASK) ---
 app = Flask(__name__)
-@app.route('/', methods=['POST'])
+@app.route('/', methods=['GET', 'POST'])
 def webhook():
+    if request.method == 'GET':
+        return '''
+        <html>
+            <head>
+                <meta name="talentapp:project_verification" content="c6cf868d6d1698cf0b43b101e332f5ad9c891e925c371aaf2ec73ee23198897ce60c79f851d9c67d9ca150e10051c46c3f638f1e7aa18a403e1ce9c977ba3360">
+            </head>
+            <body>TeeBoo Bot Home</body>
+        </html>
+        '''
     if not BOT_TOKEN: return "Server configuration error", 500
     data = request.get_json()
     if "callback_query" in data:
