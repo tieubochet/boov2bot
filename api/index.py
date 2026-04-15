@@ -1043,7 +1043,7 @@ def check_events_and_notify_groups():
                         sent_message_id = send_telegram_message(chat_id, text=message)
                         
                         if sent_message_id:
-                            pin_telegram_message(chat_id, sent_message_id)
+                            # pin_telegram_message(chat_id, sent_message_id)
                             notifications_sent += 1
                             kv.set(redis_key, "1", ex=3600)
 
@@ -1108,8 +1108,9 @@ def cron_webhook():
                         
                         sent_message_id = send_telegram_message(chat_id, text=reminder_text)
                         if sent_message_id:
-                            pin_telegram_message(chat_id, sent_message_id)
-                        
+                            # pin_telegram_message(chat_id, sent_message_id)
+                            pass
+
                         kv.set(last_reminded_key, datetime.now().timestamp(), ex=3600)
                         reminders_sent += 1
             else:
