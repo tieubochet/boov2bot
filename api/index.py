@@ -835,7 +835,7 @@ def process_portfolio_text(message_text: str) -> str | None:
         except requests.RequestException:
             result_lines.append(f"🔌 Lỗi kết nối khi check mạng {network}")
 
-    return "\n".join(result_lines) + f"\n--------------------\n*Ai chơi alpha là chó con: *${total_value:,.2f}**"
+    return "\n".join(result_lines) + f"\n--------------------\n*Tổng: *${total_value:,.2f}**"
 
 # --- WEB SERVER (FLASK) ---
 app = Flask(__name__)
